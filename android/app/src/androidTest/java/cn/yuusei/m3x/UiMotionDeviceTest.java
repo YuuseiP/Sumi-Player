@@ -135,7 +135,7 @@ public final class UiMotionDeviceTest extends InstrumentationTestCase {
                 measure("dark-sheet",click(".m3x-output"));capture(directory,"dark-sheet");act("M3X_UI.closeDialog(document.getElementById('output-dialog'),true)");
                 setting("theme","light");measure("theme-light-navigation",click(".m3x-nav [data-page=library]"));capture(directory,"light-library");
                 setting("visualTheme","classic");measure("classic-navigation",click(".m3x-nav [data-page=player]"));
-                assertEquals("Classic appearance retains original motion","\"off\"",js("document.querySelector('.m3x-screen').dataset.motion"));
+                assertEquals("Classic appearance has its own motion set","\"classic\"",js("document.querySelector('.m3x-screen').dataset.motion"));
             }
             assertEquals("Catalog unchanged",tracks,app.library.all().size());assertEquals("No scan",scan.toString(),app.library.scanStatus().toString());
             evidence.put("passed",true);

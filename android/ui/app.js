@@ -120,8 +120,13 @@
   };
   const quality = track => track.bits && track.sampleRate ? `${track.bits}bit · ${track.sampleRate / 1000}kHz` : track.sampleRate ? `${track.sampleRate / 1000}kHz` : track.codec || "音频";
   const format = track => track.neteaseId ? "网易云音乐 · 在线播放" : (track.codec || "FLAC") + " · " + quality(track);
+  // data-text targets are static markup: look them up once instead of scanning the
+  // whole document for every key on every render.
+  const textTargets = new Map();
   function text(key, value) {
-    root.querySelectorAll(`[data-text="${key}"]`).forEach(element => {
+    let targets = textTargets.get(key);
+    if (!targets || targets.some(element => !element.isConnected)) { targets = [...root.querySelectorAll(`[data-text="${key}"]`)]; textTargets.set(key, targets); }
+    targets.forEach(element => {
       if (element.textContent !== String(value)) element.textContent = value;
     });
   }
@@ -130,12 +135,36 @@
   }
   function toast(message) {
     const element = document.getElementById("toast");
-    clearTimeout(toastTimer);
-    element.textContent = message;
-    element.hidden = false;
-    toastTimer = setTimeout(() => { element.hidden = true; }, 2400);
+    window.M3X_MOTION.toast(element, message);
   }
+  // Implicit saves (play/pause/seek/navigation) serialise the whole UI state and
+  // cross the synchronous native bridge, which blocks the Android UI thread and
+  // therefore every frame. When the playback queue is unchanged they are
+  // coalesced and run after the current transition, in idle time. Saves that
+  // report errors or change the queue (which the native player must see before
+  // the next command) stay synchronous.
+  let persistTimer = 0, persistIdle = 0, syncedQueue = null;
+  const queueSignature = () => [state.queue, state.queue.length, state.queueCleared, state.queueScope, state.mode, state.hidden.size, state.preferences];
+  const sameQueue = () => syncedQueue && queueSignature().every((value, index) => value === syncedQueue[index]);
   function persist(reportError = false) {
+    if (!reportError && window.M3X_NATIVE && sameQueue()) {
+      clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => {
+        const run = () => { persistIdle = 0; persistNow(false); };
+        if (window.requestIdleCallback) persistIdle = requestIdleCallback(run, { timeout: 1500 }); else run();
+      }, 700);
+      return true;
+    }
+    return persistNow(reportError);
+  }
+  persist.flush = () => {
+    clearTimeout(persistTimer); persistTimer = 0;
+    if (persistIdle && window.cancelIdleCallback) cancelIdleCallback(persistIdle);
+    persistIdle = 0; persistNow(false);
+  };
+  function persistNow(reportError = false) {
+    clearTimeout(persistTimer); persistTimer = 0;
+    syncedQueue = queueSignature();
     try {
       localStorage.setItem(storageKey, JSON.stringify({
         index: state.index, trackId: tracks[state.index]?.id, layout: state.layout, mode: state.mode,
@@ -152,7 +181,15 @@
       return false;
     }
   }
+  let queueMemo = null;
   function queueIndices() {
+    const memoKey = [libraryRevision, state.queueCleared, state.mode, state.queueScope, state.queue.length, state.queue[0], state.queue[state.queue.length - 1], state.hidden.size, state.preferences.hideInLibrary].join("|");
+    if (queueMemo && queueMemo.key === memoKey && queueMemo.queue === state.queue && queueMemo.preferences === state.preferences && queueMemo.hidden === [...state.hidden].join()) return queueMemo.value;
+    const value = computeQueueIndices();
+    queueMemo = { key: memoKey, queue: state.queue, preferences: state.preferences, hidden: [...state.hidden].join(), value };
+    return value;
+  }
+  function computeQueueIndices() {
     if (state.queueCleared) return [];
     // "library" scope means the whole local catalog; online NetEase entries only play from their own lists.
     const localLibrary = () => tracks.map((_, index) => index).filter(index => !tracks[index].neteaseId && playable(tracks[index]));
@@ -160,7 +197,13 @@
     const indices = state.queue.map(id => indexById.get(id)).filter(index => index !== undefined && playable(tracks[index]));
     return state.queue.some(id => indexById.has(id)) ? indices : localLibrary();
   }
-  const excluded = track => window.M3X_PREFERENCES.excludes(track, state.preferences);
+  let excludedFor = null, excludedRevision = -1, excludedCache = new Map();
+  const excluded = track => {
+    if (excludedFor !== state.preferences || excludedRevision !== libraryRevision) { excludedFor = state.preferences; excludedRevision = libraryRevision; excludedCache = new Map(); }
+    let value = excludedCache.get(track.id);
+    if (value === undefined) { value = window.M3X_PREFERENCES.excludes(track, state.preferences); excludedCache.set(track.id, value); }
+    return value;
+  };
   const playable = track => !state.hidden.has(track.id) && !excluded(track);
   const visible = track => !state.hidden.has(track.id) && (!state.preferences.hideInLibrary || !excluded(track));
   function savePreferences(value) {
@@ -202,7 +245,17 @@
       return compareNames(String(state.sort === "title" ? displayTitle(left) : left.artist), String(state.sort === "title" ? displayTitle(right) : right.artist)) || a - b;
     });
   }
+  const libraryIndexCache = new Map();
   function libraryIndices(includeSubfolders = false) {
+    const cacheKey = [libraryRevision, state.filter, state.groupKey, state.query, state.sort, state.filenameTitle, includeSubfolders, state.preferences.hideInLibrary, [...state.hidden].join("\u0001")].join("\u0002");
+    const cached = libraryIndexCache.get(cacheKey);
+    if (cached && cached.preferences === state.preferences) return cached.value;
+    if (libraryIndexCache.size > 12) libraryIndexCache.clear();
+    const value = computeLibraryIndices(includeSubfolders);
+    libraryIndexCache.set(cacheKey, { preferences: state.preferences, value });
+    return value;
+  }
+  function computeLibraryIndices(includeSubfolders) {
     const query = state.query.trim().toLocaleLowerCase();
     return sortedIndices(tracks.map((_, index) => index).filter(index => {
       const track = tracks[index];
@@ -318,6 +371,7 @@
     if (!grouped.size) {
       const empty = document.createElement("p"); empty.className = "m3x-empty"; empty.textContent = "没有匹配的音乐"; groups.append(empty);
     }
+    if (!appendOnly) window.M3X_MOTION.listEnter(groups, JSON.stringify([state.filter, state.groupKey, state.groupSort, state.libraryView]));
     listRenderStates.set(groups, { key: renderKey, limit: groupLimit, count: Math.min(groupLimit, ordered.length), grouped, ordered });
     scheduleListLoad();
   }
@@ -329,6 +383,7 @@
     seek.setAttribute("aria-valuetext", time(position) + "，总时长 " + time(duration));
     text("position", time(position));
     text("duration", time(duration));
+    window.M3X_MOTION.progress(position, duration, !audio.paused, dragging);
   }
   function renderPlayback() {
     root.querySelectorAll('[data-action="play"]').forEach(button => {
@@ -358,10 +413,11 @@
         list.dataset.list === "upcoming" ? [...queue.slice(queue.indexOf(state.index) + 1), ...queue.slice(0, Math.max(0, queue.indexOf(state.index)))] :
         list.dataset.list === "playlist" ? (state.playlists.find(item => item.id === state.playlistId)?.trackIds || []).map(id => indexById.get(id)).filter(index => index !== undefined) :
         list.dataset.list === "queue" ? queueIndices() : list.dataset.list === "favorites" ? favoriteIndices() : libraryIndices();
-      const indices = selection.filter(index => visible(tracks[index]));
+      const indices = list.dataset.list === "library" ? selection : selection.filter(index => visible(tracks[index]));
       const limit = listLimits[list.dataset.list] || listPageSize;
-      const renderKey = JSON.stringify([libraryRevision, state.preferences, indices, state.showCovers, state.filenameTitle, list.dataset.list === "library" ? state.libraryView : "list"]);
       const previous = listRenderStates.get(list);
+      const keyTail = JSON.stringify([libraryRevision, state.preferences, state.showCovers, state.filenameTitle, list.dataset.list === "library" ? state.libraryView : "list"]);
+      const renderKey = previous && previous.indices === indices && previous.keyTail === keyTail ? previous.key : JSON.stringify(indices) + keyTail;
       const appendOnly = previous?.key === renderKey && previous.limit <= limit;
       if (appendOnly && previous.current !== state.index) {
         list.querySelectorAll("[data-track]").forEach(button => button.setAttribute("aria-current", String(Number(button.dataset.track) === state.index)));
@@ -438,8 +494,11 @@
         nodes.push(empty);
       }
       if (appendOnly) { list.querySelector("[data-more-list]")?.remove(); list.append(...nodes); }
-      else list.replaceChildren(...nodes);
-      listRenderStates.set(list, { key: renderKey, limit, count: Math.min(limit, indices.length), current: state.index });
+      else {
+        list.replaceChildren(...nodes);
+        window.M3X_MOTION.listEnter(list, JSON.stringify([list.dataset.list, state.filter, state.groupKey, state.sort, state.libraryView, state.playlistId]));
+      }
+      listRenderStates.set(list, { key: renderKey, keyTail, indices, limit, count: Math.min(limit, indices.length), current: state.index });
     });
     scheduleListLoad();
   }
@@ -515,8 +574,11 @@
     for (const type of ["album", "artist"]) screen.querySelector('[data-action="open-song-' + type + '"]').disabled = !songDestinations(track, type).length;
     text("format", track ? format(track) : "");
     text("next", tracks.length ? state.mode === 1 ? "随机选择下一首" : tracks[nextIndex()]?.title || "队列播放完毕" : "暂无歌曲");
-    const localTracks = tracks.filter(track => !track.neteaseId), visibleCount = localTracks.filter(visible).length;
-    text("trackCount", visibleCount + " 首" + (visibleCount < localTracks.length ? " · 已隐藏 " + (localTracks.length - visibleCount) + " 首" : ""));
+    const countKey = libraryRevision + "|" + state.hidden.size + "|" + state.preferences.hideInLibrary;
+    // NetEase imports live in the library list but are not part of the local library's counts.
+    if (render.countKey !== countKey || render.countPreferences !== state.preferences) { const local = tracks.filter(track => !track.neteaseId); render.countKey = countKey; render.countPreferences = state.preferences; render.localCount = local.length; render.visibleCount = local.filter(visible).length; render.bytes = tracks.reduce((size, item) => size + item.bytes, 0); }
+    const visibleCount = render.visibleCount, localCount = render.localCount;
+    text("trackCount", visibleCount + " 首" + (visibleCount < localCount ? " · 已隐藏 " + (localCount - visibleCount) + " 首" : ""));
     text("queueCount", queue.length + " 首歌曲");
     const playlist = state.playlists.find(item => item.id === state.playlistId);
     text("playlistName", playlist?.name || "歌单");
@@ -534,7 +596,11 @@
     favorite.setAttribute("aria-label", state.favorites.has(track?.id) ? "取消收藏当前歌曲" : "收藏当前歌曲");
     screen.querySelectorAll('[data-action="play"], [data-action="next"], [data-action="previous"], [data-action="favorite"], [data-action="add-playlist"], [data-action="song-menu"]').forEach(button => { button.disabled = !track || (["next", "previous"].includes(button.dataset.action) && !queue.length); });
     const mode = screen.querySelector('[data-action="mode"]');
-    mode.innerHTML = icon(["sequential", "shuffle", "repeat"][state.mode]);
+    if (mode.dataset.mode !== String(state.mode)) {
+      const animate = mode.dataset.mode !== undefined;
+      mode.dataset.mode = String(state.mode); mode.innerHTML = icon(["sequential", "shuffle", "repeat"][state.mode]);
+      if (animate) window.M3X_MOTION.icon(mode);
+    }
     mode.setAttribute("aria-label", "播放模式：" + modes[state.mode]);
     screen.querySelectorAll("[data-filter]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.filter === state.filter)));
     screen.querySelectorAll('[data-filter="characters"], [data-filter="groups"]').forEach(button => { button.hidden = !library?.classification; });
@@ -545,7 +611,7 @@
       if (input.type === "checkbox") input.checked = state[input.dataset.setting];
       else input.value = state[input.dataset.setting];
     });
-    text("librarySize", tracks.length + " 首 · " + (tracks.reduce((size, item) => size + item.bytes, 0) / 1024 ** 3).toFixed(2) + " GiB");
+    text("librarySize", tracks.length + " 首 · " + (render.bytes / 1024 ** 3).toFixed(2) + " GiB");
     renderProfile();
     if (state.page === "library") renderGroups();
     renderLists();
@@ -595,26 +661,30 @@
   }
   const closingDialogs = new WeakMap();
   function openDialog(element) {
-    clearTimeout(closingDialogs.get(element));
+    closingDialogs.delete(element);
+    const resume = element.open && element.classList.contains("is-closing");
     element.classList.remove("is-closing");
     element.dataset.instant = "false";
     if (!element.open) element.showModal();
     positionDialogs();
     element.classList.add("is-open");
+    window.M3X_MOTION.sheetIn(element, resume);
   }
   function closeDialog(element, instant = false) {
-    clearTimeout(closingDialogs.get(element));
+    closingDialogs.delete(element);
     element.classList.remove("is-open");
     if (!element.open) return;
     if (instant || window.M3X_MOTION.reduced()) {
       element.classList.remove("is-closing"); element.close(); return;
     }
     element.classList.add("is-closing");
-    const finish = () => {
+    const token = {};
+    closingDialogs.set(element, token);
+    window.M3X_MOTION.sheetOut(element, () => {
+      if (closingDialogs.get(element) !== token) return;
       element.classList.remove("is-closing");
       if (!element.classList.contains("is-open") && element.open) element.close();
-    };
-    closingDialogs.set(element, setTimeout(finish, 160));
+    });
   }
   function openPlaylist(action, target = tracks[state.index]?.id) {
     playlistAction = action;
@@ -1168,6 +1238,7 @@
     } else if (action === "favorite") {
       const id = tracks[state.index].id;
       if (state.favorites.has(id)) state.favorites.delete(id); else state.favorites.add(id);
+      requestAnimationFrame(() => window.M3X_MOTION.pop(button, state.favorites.has(id)));
       announce(state.favorites.has(id) ? "已收藏" : "已取消收藏");
     } else if (action === "mode") {
       // Switching to shuffle keeps the current queue (album, artist, NetEase list…) as the range.
@@ -1274,10 +1345,14 @@
     } catch (error) { toast(error.message); }
     renderScan();
   });
-  screen.querySelectorAll("[data-setting]").forEach(input => input.addEventListener("change", () => {
-    state[input.dataset.setting] = input.type === "checkbox" ? input.checked : input.value;
+  screen.querySelectorAll("[data-setting]").forEach(input => input.addEventListener("change", event => {
+    const value = input.type === "checkbox" ? input.checked : input.value;
     if (["sort", "groupSort"].includes(input.dataset.setting)) resetLibraryLists();
-    render();
+    // Whole-appearance changes cross-fade as one compositor snapshot.
+    // State changes now (persisted below); the DOM update runs inside the snapshot.
+    state[input.dataset.setting] = value;
+    if (event.isTrusted && ["theme", "visualTheme", "layout"].includes(input.dataset.setting)) window.M3X_MOTION.themeChange(render);
+    else render();
     persist(true);
     announce("设置已保存");
   }));
@@ -1346,15 +1421,23 @@
   window.addEventListener("m3x-native-track", event => {
     const index = tracks.findIndex(track => track.id === event.detail);
     if (index < 0 || index === state.index) return;
-    state.queue = window.nativeCommand("queue").sourceIds || state.queue;
     state.queueCleared = false;
     state.index = index; pendingSeek = 0;
     state.history = [event.detail, ...state.history.filter(id => id !== event.detail)].slice(0, 20);
     render();
+    // Reading back 4,000+ queue ids costs ~60 ms on the UI thread; do it once the
+    // song-change animation has played, and re-render only if the queue moved.
+    clearTimeout(queueReadTimer);
+    queueReadTimer = setTimeout(() => {
+      const ids = window.nativeCommand("queue").sourceIds;
+      if (ids && (ids.length !== state.queue.length || ids.some((id, i) => id !== state.queue[i]))) { state.queue = ids; render(); }
+    }, 650);
   });
+  let queueReadTimer = 0;
   window.addEventListener("scroll", positionDialogs);
   new ResizeObserver(positionDialogs).observe(screen);
-  window.addEventListener("pagehide", () => persist());
+  window.addEventListener("pagehide", () => persist.flush());
+  document.addEventListener("visibilitychange", () => { if (document.hidden && persistTimer) persist.flush(); });
   if (tracks[state.index]) audio.src = tracks[state.index].src;
   window.M3X_PREFERENCES.mount({ root, getSettings: () => state.preferences, getLibrary: () => library,
     commit: savePreferences, openDialog });

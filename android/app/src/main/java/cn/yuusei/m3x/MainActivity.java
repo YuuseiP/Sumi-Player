@@ -29,8 +29,21 @@ public final class MainActivity extends Activity {
     private JSONObject documentData;
     private boolean ambientDisplay, ambientKeptAwake;
     private int ambientOrientation, ambientSystemUi, ambientStatusColor, ambientNavigationColor;
+    private android.animation.ValueAnimator barAnimator;
     private static final int DIRECTORY = 10, FILE = 11, EXPORT = 12, IMPORT = 13, NETEASE_LOGIN = 14, STORAGE = 20;
     private String neteaseLoginRequest = "";
+
+    /** System bars glide with the page's registered colour tokens (same duration and curve). */
+    private void animateBars(int target, int duration) {
+        if (barAnimator != null) barAnimator.cancel();
+        int start = getWindow().getStatusBarColor();
+        if (duration <= 0 || start == target) { getWindow().setStatusBarColor(target); getWindow().setNavigationBarColor(target); return; }
+        barAnimator = android.animation.ValueAnimator.ofObject(new android.animation.ArgbEvaluator(), start, target);
+        barAnimator.setDuration(duration);
+        barAnimator.setInterpolator(new android.view.animation.PathInterpolator(.4f, 0f, .2f, 1f));
+        barAnimator.addUpdateListener(animation -> { int value = (Integer) animation.getAnimatedValue(); getWindow().setStatusBarColor(value); getWindow().setNavigationBarColor(value); });
+        barAnimator.start();
+    }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -220,6 +233,7 @@ public final class MainActivity extends Activity {
             }
             ambientDisplay = true;
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            if (barAnimator != null) barAnimator.cancel();
             getWindow().setStatusBarColor(Color.BLACK); getWindow().setNavigationBarColor(Color.BLACK);
             getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
             if (hasRotationSensor()) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
@@ -289,7 +303,7 @@ public final class MainActivity extends Activity {
                                 else ambientSystemUi |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
                                 return "{}";
                             }
-                            getWindow().setStatusBarColor(color); getWindow().setNavigationBarColor(color);
+                            animateBars(color, data.optInt("duration", 0));
                             View decor = getWindow().getDecorView();
                             int flags = decor.getSystemUiVisibility();
                             if (data.optBoolean("dark")) flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;

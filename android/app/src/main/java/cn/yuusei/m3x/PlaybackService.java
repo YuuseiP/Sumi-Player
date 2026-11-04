@@ -174,7 +174,9 @@ public final class PlaybackService extends MediaSessionService {
                 long now = SystemClock.elapsedRealtime();
                 if (statsPlaying) statsTime(Math.max(0, Math.min(1500, now - lastStats)));
                 statsPlaying = playing; lastStats = now;
-                if (!playing) savePosition();
+                // Brief not-playing states during a song change would otherwise re-serialise the
+                // whole UI settings on the main thread mid-animation; coalesce them.
+                if (!playing) { app.main.removeCallbacks(deferredSave); app.main.postDelayed(deferredSave, 700); }
                 app.main.removeCallbacks(fadeTick); app.main.post(fadeTick);
             }
             @Override public void onPlayWhenReadyChanged(boolean ready, int reason) {
@@ -189,17 +191,13 @@ public final class PlaybackService extends MediaSessionService {
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) cancelWholeSongTimer();
                 listenedMs = 0; counted = false;
                 if (sleepExpired) { finishSleep(); return; }
-                error = ""; applyDsp(); refreshLoudness(true); savePosition();
+                error = ""; applyDsp(); refreshLoudness(true);
                 JSONObject track = currentTrack();
                 String album = track == null ? "" : track.optString("album");
                 fadeTrackStart = !sameAlbum(previousAlbum, album); previousAlbum = album;
-                if (track != null && !restoring) {
-                    try {
-                        JSONObject ui = app.settings("ui"); JSONArray history = ui.optJSONArray("history"); JSONArray updated = new JSONArray().put(track.getString("id"));
-                        if (history != null) for (int i = 0; i < history.length() && updated.length() < 20; i++) if (!history.getString(i).equals(track.getString("id"))) updated.put(history.getString(i));
-                        ui.put("history", updated); app.save("ui", ui);
-                    } catch (Exception ignored) {}
-                }
+                // Position + history are written once, after the UI's song-change animation.
+                if (track != null && !restoring) historyPending = true;
+                app.main.removeCallbacks(deferredSave); app.main.postDelayed(deferredSave, 700);
                 prepareDsd();
             }
             @Override public void onPlaybackStateChanged(int state) {
@@ -608,6 +606,24 @@ public final class PlaybackService extends MediaSessionService {
 
     private void applyDsp() { try { if (processor != null) processor.engine.set(dspConfig()); } catch (Exception exception) { error = exception.getMessage(); } }
     private void statsTime(long elapsed) { ListeningStats.record(stats, System.currentTimeMillis(), elapsed, java.util.TimeZone.getDefault()); }
+    private boolean historyPending;
+    /** One read-modify-write of the UI settings for position and listening history. */
+    private final Runnable deferredSave = () -> {
+        if (player == null || restoring) return;
+        JSONObject ui = app.settings("ui"), track = currentTrack();
+        try {
+            if (track != null) {
+                ui.put("trackId", track.getString("id")); ui.put("position", player.getCurrentPosition() / 1000d);
+                if (historyPending) {
+                    JSONArray history = ui.optJSONArray("history"); JSONArray updated = new JSONArray().put(track.getString("id"));
+                    if (history != null) for (int i = 0; i < history.length() && updated.length() < 20; i++) if (!history.getString(i).equals(track.getString("id"))) updated.put(history.getString(i));
+                    ui.put("history", updated);
+                }
+            }
+            historyPending = false;
+            app.save("ui", ui);
+        } catch (Exception ignored) {}
+    };
     private void savePosition() {
         if (player == null || restoring) return;
         JSONObject ui = app.settings("ui"), track = currentTrack();
@@ -643,7 +659,7 @@ public final class PlaybackService extends MediaSessionService {
     @Override public void onDestroy() {
         destroyed = true;
         ((AudioManager) getSystemService(AUDIO_SERVICE)).unregisterAudioDeviceCallback(routeChanges);
-        app.main.removeCallbacks(tick); app.main.removeCallbacks(fadeTick); fileRequest++; savePosition(); app.save("tools", stats); loudness.shutdown();
+        app.main.removeCallbacks(tick); app.main.removeCallbacks(fadeTick); app.main.removeCallbacks(deferredSave); fileRequest++; if (historyPending) deferredSave.run(); savePosition(); app.save("tools", stats); loudness.shutdown();
         if (session != null) session.release(); if (player != null) player.release(); app.playback = null; super.onDestroy();
     }
 }

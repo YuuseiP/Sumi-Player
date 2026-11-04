@@ -420,7 +420,13 @@
       const note = document.createElement("p"); note.className = "m3x-caption";
       note.textContent = selectedLyrics ? "此歌曲已采用逐曲标注，偏差已应用。请在搜索／更换歌词中调整逐曲偏差。" : "正值使歌词延后，负值使歌词提前；此偏移对未采用逐曲标注的歌曲生效。";
       content.append(note, control, button("归零", () => { if (selectedLyrics) return; $("lyric-offset").value = 0; $("lyric-offset").dispatchEvent(new Event("change")); }));
-      content.closest("dialog").addEventListener("close", () => home.append(control), { once: true });
+      // Return the control as soon as the dialog stops being open: the native close
+      // event is dispatched in a later task, after the sheet's exit animation.
+      const dialog = content.closest("dialog");
+      const restore = () => { if (!home.contains(control)) home.append(control); };
+      const watch = new MutationObserver(() => { if (!dialog.open) { watch.disconnect(); restore(); } });
+      watch.observe(dialog, { attributes: true, attributeFilter: ["open"] });
+      dialog.addEventListener("close", () => { watch.disconnect(); restore(); }, { once: true });
     }
     $("lyrics-more").addEventListener("click", () => {
       const content = sheet("歌词更多操作"), menu = content.closest("dialog");

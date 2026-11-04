@@ -20,8 +20,8 @@
   function palette(hue, dark) {
     const h = Number.isFinite(hue) ? hue : fallback;
     const color = (s, l) => `hsl(${h}, ${s}%, ${l}%)`;
-    return dark ? { bg: color(12, 10), fg: color(12, 94), muted: color(12, 72), surface: color(14, 16), border: color(15, 28), accent: color(55, 77) }
-      : { bg: color(28, 97), fg: color(20, 13), muted: color(15, 36), surface: color(28, 91), border: color(18, 77), accent: color(55, 26) };
+    return dark ? { bg: color(12, 10), fg: color(12, 94), muted: color(12, 72), surface: color(14, 16), raised: color(14, 14), border: color(15, 28), accent: color(55, 77), onAccent: color(40, 12) }
+      : { bg: color(28, 97), fg: color(20, 13), muted: color(15, 36), surface: color(28, 91), raised: color(30, 99), border: color(18, 77), accent: color(55, 26), onAccent: color(30, 98) };
   }
   if (typeof module !== "undefined" && module.exports) module.exports = { hueFromPixels, palette };
   if (!global.document) return;
@@ -39,14 +39,14 @@
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
     screen.dataset.visualTheme = options.visualTheme;
     const endfield = options.visualTheme === "endfield";
-    const colors = endfield ? (dark ? { bg: "#161817", fg: "#f3f3e9", muted: "#b2b5aa", surface: "#262923", border: "#505347", accent: "#ecf22a" }
-      : { bg: "#f3f3e9", fg: "#1d211b", muted: "#575e50", surface: "#e6e7da", border: "#b9bdb0", accent: "#4e5515" })
-      : options.colorMode === "cover" ? palette(currentHue, dark) : null;
-    for (const key of ["bg", "fg", "muted", "surface", "border", "accent"]) {
-      if (colors) screen.style.setProperty("--m3x-" + key, colors[key]);
-      else screen.style.removeProperty("--m3x-" + key);
+    // Fixed palettes live in styles.css; only the cover palette is injected. The
+    // tokens are registered custom properties, so either change glides.
+    const colors = !endfield && options.colorMode === "cover" ? palette(currentHue, dark) : null;
+    for (const [key, name] of [["bg", "bg"], ["fg", "fg"], ["muted", "muted"], ["surface", "surface"], ["raised", "raised"], ["border", "border"], ["accent", "accent"], ["onAccent", "on-accent"]]) {
+      if (colors) screen.style.setProperty("--m3x-" + name, colors[key]);
+      else screen.style.removeProperty("--m3x-" + name);
     }
-    const bg = colors ? colors.bg : dark ? "#191a18" : "#f5f2eb";
+    const bg = colors ? colors.bg : endfield ? (dark ? "#161817" : "#f3f3e9") : dark ? "#191a18" : "#f5f2eb";
     if (!barContext) {
       const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
       barContext = canvas.getContext("2d");
@@ -55,7 +55,7 @@
     bar.fillStyle = bg;
     if (global.nativeCommand && paint.lastBar !== bar.fillStyle + dark) {
       paint.lastBar = bar.fillStyle + dark;
-      global.nativeCommand("appearance-bars", { color: bar.fillStyle, dark });
+      global.nativeCommand("appearance-bars", { color: bar.fillStyle, dark, duration: screen.dataset.motionReduced === "true" ? 0 : 520 });
     }
   }
   function apply(state, track) {
@@ -63,7 +63,8 @@
     const key = options.visualTheme !== "endfield" && options.colorMode === "cover" ? track?.cover || "" : "";
     if (key !== currentKey) {
       currentKey = key; const token = ++request;
-      currentHue = cache.has(key) ? cache.get(key) : fallback;
+      // Keep the previous hue while a new cover decodes: one glide, not two.
+      if (cache.has(key)) currentHue = cache.get(key); else if (!key) currentHue = fallback;
       if (key && !cache.has(key)) {
         const image = new Image();
         image.onload = () => {
