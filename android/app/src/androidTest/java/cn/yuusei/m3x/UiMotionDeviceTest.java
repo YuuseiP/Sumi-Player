@@ -106,6 +106,12 @@ public final class UiMotionDeviceTest extends InstrumentationTestCase {
             act("['player','library','profile','player','profile'].forEach(function(p){document.querySelector('.m3x-nav [data-page='+p+']').click()})");
             Thread.sleep(300);assertEquals("Latest navigation wins","false",js("document.querySelector('[data-panel=profile]').hidden"));
             assertEquals("Only one visible page","1",js("document.querySelectorAll('[data-panel]:not([hidden])').length"));
+            // A resize would relayout and re-rasterise pages in the middle of a transition.
+            String geometry="(function(){var c=document.querySelector('.m3x-content').clientHeight,m=document.querySelector('.m3x-mini'),s=parseFloat(getComputedStyle(document.querySelector('.m3x-screen')).getPropertyValue('--m3x-mini-space'));return c+':'+document.querySelector('[data-panel=profile]').clientHeight+':'+document.querySelector('[data-panel=player]').clientHeight+':'+(m.offsetHeight+parseFloat(getComputedStyle(m).marginBottom)===s)})()";
+            String onProfile=js(geometry);act(click(".m3x-nav [data-page=player]"));Thread.sleep(700);
+            assertEquals("Page geometry is independent of the mini player",onProfile,js(geometry));
+            assertTrue("Mini player fills its reserved space",onProfile.endsWith(":true\""));
+            act(click(".m3x-nav [data-page=profile]"));Thread.sleep(700);
             // Actual device song, muted after decoding; no synthetic song or catalog changes.
             getInstrumentation().runOnMainSync(()->{app.playback.player.seekTo(Math.min(30000,Math.max(0,app.playback.player.getDuration()/2)));app.playback.player.prepare();app.playback.player.play();});
             waitJs("nativeCommand('poll').playing");Thread.sleep(700);

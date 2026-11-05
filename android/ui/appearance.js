@@ -35,6 +35,7 @@
     const paintKey = [dark, options.visualTheme, options.colorMode, currentHue].join(":");
     if (paintKey === lastPaint) return;
     lastPaint = paintKey;
+    if (global.M3X_MOTION) global.M3X_MOTION.recolor();
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
     screen.dataset.visualTheme = options.visualTheme;

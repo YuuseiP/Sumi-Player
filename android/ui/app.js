@@ -378,11 +378,14 @@
   function renderProgress() {
     const duration = Number.isFinite(audio.duration) ? audio.duration : tracks[state.index]?.duration || 0;
     const position = dragging ? Number(seek.value) : audio.currentTime || pendingSeek;
-    seek.max = duration;
-    if (!dragging) seek.value = Math.min(position, duration);
-    seek.setAttribute("aria-valuetext", time(position) + "，总时长 " + time(duration));
-    text("position", time(position));
-    text("duration", time(duration));
+    // A warm player page stays rendered while hidden: repainting it on every tick costs CPU for nothing. render() syncs it on entry.
+    if (state.page === "player") {
+      seek.max = duration;
+      if (!dragging) seek.value = Math.min(position, duration);
+      seek.setAttribute("aria-valuetext", time(position) + "，总时长 " + time(duration));
+      text("position", time(position));
+      text("duration", time(duration));
+    }
     window.M3X_MOTION.progress(position, duration, !audio.paused, dragging);
   }
   function renderPlayback() {
@@ -560,14 +563,21 @@
     screen.querySelectorAll("[data-library-view]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.libraryView === state.libraryView)));
     screen.querySelector('[data-setting="colorMode"]').disabled = state.visualTheme === "endfield";
     screen.dataset.layout = state.layout;
-    screen.querySelectorAll("[data-panel]").forEach(panel => { panel.hidden = panel.dataset.panel !== state.page; });
+    screen.querySelectorAll("[data-panel]").forEach(panel => {
+      const hide = panel.dataset.panel !== state.page;
+      panel.hidden = hide;
+      // Warm pages stay rendered while hidden, so [hidden] alone no longer removes them from the accessibility tree.
+      if (hide) panel.setAttribute("aria-hidden", "true"); else panel.removeAttribute("aria-hidden");
+    });
     screen.querySelectorAll(".m3x-nav [data-page]").forEach(button => {
       let section = ["settings", "statistics", "favorites", "playlists", "playlist"].includes(state.page) ? "profile" : ["queue", "lyrics"].includes(state.page) ? "player" : state.page === "create-library" ? "library" : state.page === "netease-list" ? (window.M3X_SOURCE?.listSection?.() || "netease") : state.page;
       if (screen.dataset.source === "netease") section = { profile: "netease-me", library: "netease" }[section] || section;
       if (button.dataset.page === section) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
-    screen.querySelector(".m3x-mini").hidden = state.page === "player";
+    const mini = screen.querySelector(".m3x-mini");
+    mini.hidden = state.page === "player";
+    if (mini.hidden) mini.setAttribute("aria-hidden", "true"); else mini.removeAttribute("aria-hidden");
     text("title", track ? displayTitle(track) : "暂无歌曲");
     text("singer", track?.artist || "");
     text("album", track?.album || "");
@@ -665,7 +675,7 @@
     const resume = element.open && element.classList.contains("is-closing");
     element.classList.remove("is-closing");
     element.dataset.instant = "false";
-    if (!element.open) element.showModal();
+    if (!element.open) { window.M3X_MOTION.coolPages(); element.showModal(); }
     positionDialogs();
     element.classList.add("is-open");
     window.M3X_MOTION.sheetIn(element, resume);

@@ -140,25 +140,57 @@
     if (out) out.addEventListener("finish", () => { outgoing.classList.remove("is-leaving"); out.cancel(); });
     else outgoing.classList.remove("is-leaving");
     mini(from, to);
-    // Two-frame hand-off (measured on the M3X): this frame commits only the cheap
-    // exit animation, so the response is immediate. The incoming page is unlocked
-    // on the next frame, and its style, paint and GPU raster happen while the exit
-    // is already running on the compositor instead of freezing the first frame.
-    incoming.classList.add("is-pending");
-    const token = pendingToken = {};
+    transitionAt = performance.now();
     if (kind !== "rise") shared = null;
-    requestAnimationFrame(() => {
-      if (pendingToken !== token) return;
-      incoming.classList.remove("is-pending");
+    const enter = () => {
       if (s.in) settle(run(incoming, s.in, { duration: s.inTime, easing: s.inEase, delay: s.inDelay || 0, fill: "backwards" }));
       if (kind === "rise") riseIntoPlayer(incoming);
       if (isEndfield()) headingSweep(incoming, s.inTime);
       if (to === "statistics") charts(incoming);
       incoming.querySelectorAll(INDICATOR_HOSTS).forEach(host => indicator(host, true));
+    };
+    // A warm page already has its textures: only compositing is left, so both
+    // pages start together.
+    if (isWarm(to)) { enter(); return; }
+    // Two-frame hand-off for cold pages (measured on the M3X): this frame commits
+    // only the cheap exit animation, so the response is immediate. The incoming
+    // page is unlocked on the next frame, so its style, paint and GPU raster do
+    // not delay the first frame of the exit.
+    incoming.classList.add("is-pending");
+    const token = pendingToken = {};
+    requestAnimationFrame(() => {
+      if (pendingToken !== token) return;
+      incoming.classList.remove("is-pending");
+      enter();
     });
   }
   let pendingToken = null;
   function releasePending() { pendingToken = null; screen.querySelectorAll(".m3x-panel.is-pending").forEach(element => element.classList.remove("is-pending")); }
+
+  /* ---------- warm top-level pages ---------- */
+  // GPU raster stalls every running animation on the M3X (it shares a thread with
+  // WebView's draw), and content-visibility drops a hidden page's textures, so a
+  // cold switch re-rasterises the whole page. Top-level pages therefore stay
+  // painted at opacity 0. Colour changes would restyle and repaint all of them on
+  // every frame of the glide, and a modal dialog's inert state would restyle them
+  // when it opens and closes, so they go cold for the duration.
+  let warmTimer = 0, transitionAt = -Infinity;
+  const isWarm = page => TOP.includes(page) && "warm" in panel(page).dataset;
+  function warmLater(delay) {
+    clearTimeout(warmTimer);
+    warmTimer = setTimeout(() => {
+      // Warming restyles and rasterises: never let it interrupt a transition.
+      const wait = transitionAt + 700 - performance.now();
+      if (wait > 0) { warmLater(wait); return; }
+      if (screen.querySelector("dialog[open]")) return; // Its close event comes back here.
+      // One page per step, so the main thread stays responsive between them.
+      const page = TOP.find(name => !isWarm(name));
+      if (page) { panel(page).dataset.warm = ""; warmLater(400); }
+    }, delay);
+  }
+  function coolPages() { clearTimeout(warmTimer); TOP.forEach(name => { delete panel(name).dataset.warm; }); }
+  function recolor() { coolPages(); warmLater(1500); }
+  screen.addEventListener("close", () => warmLater(800), true);
   // Statistics: bars grow from their baselines in reading order.
   function charts(target) {
     target.querySelectorAll(".m3x-day-chart i").forEach((bar, index) => settle(run(bar, [{ transform: "scaleY(0)" }], { duration: 560, delay: 140 + index * 40, easing: EASE.emph, fill: "backwards" }, "chart")));
@@ -258,6 +290,7 @@
     incoming.src = source;
   }
   function songChanged() {
+    transitionAt = performance.now();
     const texts = screen.querySelectorAll(".m3x-song-text > *");
     if (visible(texts[0])) texts.forEach((element, index) => settle(run(element, [{ opacity: 0, transform: `translate3d(${direction * 18}px,0,0)` }, { opacity: 1, transform: "none" }],
       { duration: 440, delay: 60 + index * 45, easing: EASE.emph, fill: "backwards" })));
@@ -365,6 +398,10 @@
     const segmented = host.classList.contains("m3x-view-switch");
     const inset = segmented ? 0 : 12;
     const x = active.offsetLeft + inset, width = Math.max(8, active.offsetWidth - inset * 2);
+    // Re-entering a page with the same selection must not touch style or layout.
+    const at = x + ":" + width;
+    if (bar.dataset.at === at && bar.style.opacity === "1") { delete bar.dataset.stale; return; }
+    bar.dataset.at = at;
     if (instant || bar.dataset.stale === "true" || !enabled) bar.classList.add("is-instant");
     delete bar.dataset.stale;
     bar.style.opacity = "1";
@@ -527,8 +564,10 @@
       const rail = host.querySelector(".m3x-seek-rail");
       if (!fill) return;
       const last = progressState.get(host);
+      // Nothing to show on a hidden page; on return the bar lands in place instead of sliding from a stale position.
+      if (!visible(host)) { if (last) last.stale = true; else progressState.set(host, { p: -1, duration: 0, mode: "none", stale: true }); return; }
       const jump = !last || Math.abs(p - last.p) * Math.max(1, duration) > 1.6 || last.duration !== duration;
-      const smooth = enabled && !dragging && visible(host);
+      const smooth = enabled && !dragging && !(last && last.stale);
       const mode = !smooth ? "none" : jump ? "jump" : playing && host.classList.contains("m3x-seek") ? "tick" : "none";
       if (last && Math.abs(last.p - p) < 0.00005 && last.mode === mode) return;
       progressState.set(host, { p, duration, mode });
@@ -582,6 +621,7 @@
     nav.style.setProperty("--m3x-nav-index", String(Math.max(0, top().indexOf(current))));
     if (firstRender) {
       firstRender = false; bootedAt = performance.now() + 600;
+      warmLater(1200);
       requestAnimationFrame(() => requestAnimationFrame(() => { navIndicator.style.transition = ""; }));
       indicators(true);
     }
@@ -606,5 +646,5 @@
 
   document.addEventListener("visibilitychange", () => { if (document.hidden) cancelAll(); });
   if (media.addEventListener) media.addEventListener("change", () => configure(preference)); else if (media.addListener) media.addListener(() => configure(preference));
-  window.M3X_MOTION = { render, configure, cover, icon, pop, centerLyric, cancelScroll, reduced, sheetIn, sheetOut, toast, listEnter, progress, themeChange, indicators, ease: EASE };
+  window.M3X_MOTION = { render, configure, cover, icon, pop, centerLyric, cancelScroll, reduced, sheetIn, sheetOut, toast, listEnter, progress, themeChange, indicators, recolor, coolPages, ease: EASE };
 })();

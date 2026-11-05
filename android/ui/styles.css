@@ -152,10 +152,21 @@ html[data-theme=dark] #m3x-concept .m3x-error { color: #ffb4a6; }
    hidden state forced a 65–130 ms whole-subtree style recalc on every switch, so
    hiding relies on content-visibility alone. Each page is its own compositor
    layer, so a page that starts leaving is never re-rasterised just to fade. */
-#m3x-concept .m3x-panel { position: absolute; top: 0; left: 0; right: 0; bottom: 0; padding: 0 var(--gutter); display: flex; flex-direction: column; min-height: 0; contain: layout paint; will-change: transform; }
+/* Page geometry never depends on the mini player: resizing a page would relayout
+   and re-rasterise it in the middle of a transition. It floats over a space every
+   page but the player reserves. */
+#m3x-concept .m3x-screen { --m3x-mini-space: 66px; }
+#m3x-concept .m3x-screen[data-visual-theme=endfield] { --m3x-mini-space: 58px; }
+#m3x-concept .m3x-panel[data-panel=player] { bottom: 0; }
+#m3x-concept .m3x-panel { position: absolute; top: 0; left: 0; right: 0; bottom: var(--m3x-mini-space); padding: 0 var(--gutter); display: flex; flex-direction: column; min-height: 0; contain: layout paint; will-change: transform; }
 #m3x-concept .m3x-panel[hidden] { display: flex !important; content-visibility: hidden; }
 #m3x-concept .m3x-panel[hidden].is-leaving { content-visibility: visible; }
 #m3x-concept .m3x-panel.is-pending { content-visibility: hidden; }
+/* Warm top-level pages keep their GPU textures while hidden, so switching to one
+   only composites; see "warm top-level pages" in motion.js. They sit below the
+   visible page (no z-index), which covers them for hit testing. */
+#m3x-concept .m3x-panel:is([data-panel=library], [data-panel=player], [data-panel=profile]) { will-change: transform, opacity; }
+#m3x-concept .m3x-panel[data-warm][hidden] { content-visibility: visible; opacity: 0; }
 #m3x-concept .m3x-panel.is-leaving { z-index: 1; }
 #m3x-concept .m3x-panel:not([hidden]) { z-index: 2; }
 #m3x-concept .m3x-panel.m3x-scroll { overflow-y: auto; padding-bottom: 20px; }
@@ -395,7 +406,7 @@ html[data-theme=dark] #m3x-concept .m3x-error { color: #ffb4a6; }
 #m3x-concept .m3x-screen[data-layout=catalog] [data-list=upcoming] { display: flex; }
 
 /* --- Mini player -------------------------------------------------------- */
-#m3x-concept .m3x-mini { order: 2; position: relative; display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-height: 58px; margin: 0 10px 8px; padding: 0 4px 0 9px; border-radius: var(--r-lg); background: var(--m3x-raised); box-shadow: var(--m3x-shadow-2); z-index: 3; }
+#m3x-concept .m3x-mini { order: 2; position: relative; display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-height: 58px; margin: calc(-1 * var(--m3x-mini-space)) 10px 8px; padding: 0 4px 0 9px; will-change: transform, opacity; border-radius: var(--r-lg); background: var(--m3x-raised); box-shadow: var(--m3x-shadow-2); z-index: 3; }
 #m3x-concept .m3x-mini-open { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; min-height: 54px; text-align: left; }
 #m3x-concept .m3x-mini-open::after { inset: 0 -4px 0 -9px; border-radius: var(--r-lg); }
 #m3x-concept .m3x-mini-cover { width: 40px; height: 40px; border-radius: var(--r-sm); flex-shrink: 0; object-fit: cover; background: var(--m3x-surface); }
@@ -629,7 +640,7 @@ html[data-theme=dark] #m3x-concept [data-visual-theme=endfield] .m3x-filters .m3
 #m3x-concept [data-visual-theme=endfield] .m3x-play { background: var(--m3x-signal); color: var(--m3x-on-signal); border-radius: 0; box-shadow: none; clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px); }
 #m3x-concept [data-visual-theme=endfield] .m3x-primary { background: var(--m3x-fg); color: var(--m3x-bg); clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px); }
 #m3x-concept [data-visual-theme=endfield] .m3x-lyrics-more { background: var(--m3x-signal); color: var(--m3x-on-signal); border-radius: 0; box-shadow: none; }
-#m3x-concept [data-visual-theme=endfield] .m3x-mini { margin: 0; border-radius: 0; box-shadow: none; background: var(--m3x-bg); border-top: 1px solid var(--m3x-border); padding-left: 16px; }
+#m3x-concept [data-visual-theme=endfield] .m3x-mini { margin: calc(-1 * var(--m3x-mini-space)) 0 0; border-radius: 0; box-shadow: none; background: var(--m3x-bg); border-top: 1px solid var(--m3x-border); padding-left: 16px; }
 #m3x-concept [data-visual-theme=endfield] .m3x-mini-open::after { border-radius: 0; }
 #m3x-concept [data-visual-theme=endfield] .m3x-mini-progress { left: 0; right: 0; top: -1px; bottom: auto; height: 2px; border-radius: 0; background: transparent; }
 #m3x-concept [data-visual-theme=endfield] .m3x-mini-progress-fill, #m3x-concept [data-visual-theme=endfield] .m3x-seek-fill { background: var(--m3x-fg); }
@@ -722,8 +733,11 @@ html[data-theme=dark] #m3x-concept [data-visual-theme=endfield] .m3x-player::bef
 /* ==========================================================================
    Transition plumbing
    ========================================================================== */
-/* The mini player stays painted while it docks away (scripts keep [hidden]). */
-#m3x-concept .m3x-mini[hidden].is-leaving { display: flex !important; pointer-events: none; }
+/* The docked mini player keeps its box, so page geometry never changes, and stays
+   painted only while it docks away (scripts keep [hidden]). Unpainted, a track
+   change on the player page does not repaint it. */
+#m3x-concept .m3x-mini[hidden] { display: flex !important; opacity: 0; pointer-events: none; }
+#m3x-concept .m3x-mini[hidden]:not(.is-leaving) { content-visibility: hidden; }
 #m3x-concept .m3x-toast-leaving, #m3x-concept #toast.is-hiding { pointer-events: none; }
 /* Appearance switches: one snapshot cross-fade instead of many token tweens. */
 #m3x-concept .m3x-screen.is-theme-switching { transition: none !important; }

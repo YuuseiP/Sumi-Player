@@ -115,8 +115,12 @@ public final class AmbientDisplayDeviceTest extends InstrumentationTestCase {
             act("Array.from(document.querySelectorAll('dialog[open] button')).filter(function(b){return b.textContent.indexOf('伪息屏')===0})[0].click()");
             waitJs("M3X_AMBIENT.active()");
             getInstrumentation().runOnMainSync(() -> activity.moveTaskToBack(true));
-            Thread.sleep(900);
+            // onStop runs once the launcher has settled, which varies; poll instead of assuming a fixed time.
+            long backgrounded = SystemClock.elapsedRealtime();
+            while ((flags() & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0 && SystemClock.elapsedRealtime() - backgrounded < 12000) Thread.sleep(50);
+            report.put("backgroundReleaseMs", SystemClock.elapsedRealtime() - backgrounded);
             assertEquals("Background releases wake flag", 0, flags() & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            Thread.sleep(300);
             assertEquals("Background exits mode", "false", js("M3X_AMBIENT.active()"));
             getInstrumentation().runOnMainSync(() -> activity.startActivity(new Intent(activity, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)));
             waitJs("!M3X_AMBIENT.active()");
