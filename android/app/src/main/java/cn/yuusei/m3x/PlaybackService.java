@@ -48,11 +48,9 @@ public final class PlaybackService extends MediaSessionService {
     private String preferenceCarryId = "", preferenceOnceId = "";
     private boolean preferenceCleanupPosted;
     private boolean restoring = true;
-    private String route = "未检测到外接音频设备";
-    private final android.media.AudioDeviceCallback routeChanges = new android.media.AudioDeviceCallback() {
-        @Override public void onAudioDevicesAdded(AudioDeviceInfo[] devices) { updateRoute(); }
-        @Override public void onAudioDevicesRemoved(AudioDeviceInfo[] devices) { updateRoute(); }
-    };
+    private volatile String route = "未检测到外接音频设备";
+    private long lastRouteCheck, lastOutputChange;
+    private boolean routeCheckQueued;
     private float manualGain = 1, rampFrom = 1, rampTarget = 1;
     private long rampStart;
     private boolean pauseAfterRamp, fadeTrackStart;
@@ -119,7 +117,6 @@ public final class PlaybackService extends MediaSessionService {
         long started = SystemClock.elapsedRealtime();
         app = PlayerApp.instance; app.playback = this; settings = app.settings("audio"); stats = app.settings("tools");
         ListeningStats.initialize(stats, System.currentTimeMillis(), java.util.TimeZone.getDefault());
-        ((AudioManager) getSystemService(AUDIO_SERVICE)).registerAudioDeviceCallback(routeChanges, app.main);
         updateRoute();
         loudness = new LoudnessCache(app, id -> {
             JSONObject track = currentTrack();
@@ -128,7 +125,11 @@ public final class PlaybackService extends MediaSessionService {
         });
         buildPlayer();
         android.util.Log.i("M3X.Perf", "player built in " + (SystemClock.elapsedRealtime() - started) + " ms");
-        session = new MediaSession.Builder(this, sessionPlayer())
+        // Covers no larger than the system's metadata limit, so MediaSession.setMetadata neither rescales
+        // them on the UI thread (up to 800 ms under memory pressure) nor sends a large bitmap over Binder.
+        androidx.media3.common.util.BitmapLoader covers = new CacheBitmapLoader(new androidx.media3.datasource.DataSourceBitmapLoader(
+            androidx.media3.datasource.DataSourceBitmapLoader.DEFAULT_EXECUTOR_SERVICE.get(), new DefaultDataSource.Factory(this), null, 320));
+        session = new MediaSession.Builder(this, sessionPlayer()).setBitmapLoader(covers)
             .setSessionActivity(android.app.PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
             .build();
         app.jobs.execute(() -> {
@@ -147,6 +148,12 @@ public final class PlaybackService extends MediaSessionService {
             @Override public void play() { PlaybackService.this.play(); }
             @Override public void pause() { PlaybackService.this.pause(); }
             @Override public void setPlayWhenReady(boolean ready) { if (ready) play(); else pause(); }
+            // With the timeline command the session re-sends the whole queue to the system over
+            // Binder on every timeline update: twice per song change, about 250 ms each on the
+            // UI thread with 4,000+ songs, freezing all WebView frames. Controllers still get the
+            // current item, its metadata and next/previous; only the remote queue list is absent.
+            @Override public boolean isCommandAvailable(int command) { return command != COMMAND_GET_TIMELINE && super.isCommandAvailable(command); }
+            @Override public Player.Commands getAvailableCommands() { return super.getAvailableCommands().buildUpon().remove(COMMAND_GET_TIMELINE).build(); }
         };
     }
 
@@ -154,7 +161,11 @@ public final class PlaybackService extends MediaSessionService {
         final boolean dsp = settings.optBoolean("eq") || !settings.optString("replaygain", "off").equals("off") || settings.optBoolean("reverb") || settings.optBoolean("compressor") || settings.optBoolean("hall") || settings.optInt("sampleRate") > 0;
         DefaultRenderersFactory renderers = new DefaultRenderersFactory(this) {
             @Override protected AudioSink buildAudioSink(Context context, boolean floatOutput, boolean playbackParams) {
-                DefaultAudioSink.Builder sink = new DefaultAudioSink.Builder(context).setEnableFloatOutput(!dsp);
+                // Before Android 8 any AudioDeviceCallback makes AudioManager re-read every audio port on
+                // the UI thread after each output change, blocking 100-200 ms per song change while
+                // audioserver reopens the output. A context-free sink registers none; its default
+                // capabilities equal the detected ones unless HDMI passthrough exists.
+                DefaultAudioSink.Builder sink = (Build.VERSION.SDK_INT >= 26 ? new DefaultAudioSink.Builder(context) : new DefaultAudioSink.Builder()).setEnableFloatOutput(!dsp);
                 if (dsp) { processor = new PcmProcessor(settings.optInt("sampleRate")); sink.setAudioProcessors(new androidx.media3.common.audio.AudioProcessor[]{processor}); }
                 else processor = null;
                 return sink.build();
@@ -172,6 +183,7 @@ public final class PlaybackService extends MediaSessionService {
         player.addListener(new Player.Listener() {
             @Override public void onIsPlayingChanged(boolean playing) {
                 long now = SystemClock.elapsedRealtime();
+                lastOutputChange = now;
                 if (statsPlaying) statsTime(Math.max(0, Math.min(1500, now - lastStats)));
                 statsPlaying = playing; lastStats = now;
                 // Brief not-playing states during a song change would otherwise re-serialise the
@@ -184,6 +196,7 @@ public final class PlaybackService extends MediaSessionService {
                 else if (!ready && !preparingFile && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) cancelWholeSongTimer();
             }
             @Override public void onMediaItemTransition(MediaItem item, int reason) {
+                lastOutputChange = SystemClock.elapsedRealtime();
                 if (!preferenceCarryId.isEmpty() && (item == null || !item.mediaId.equals(preferenceCarryId))) {
                     preferenceCarryId = "";
                     schedulePreferenceCleanup();
@@ -642,9 +655,24 @@ public final class PlaybackService extends MediaSessionService {
         }
         route = devices.isEmpty() ? "未检测到外接音频设备" : "系统已连接：" + android.text.TextUtils.join(" / ", devices);
     }
+    /**
+     * Route text follows the UI's polling, off the UI thread, instead of an AudioDeviceCallback. Reading
+     * ports holds a lock the UI thread also needs, so it stays away from the moments audioserver reopens
+     * the output and that read would take 100-200 ms.
+     */
+    private void refreshRoute() {
+        long now = SystemClock.elapsedRealtime();
+        if (routeCheckQueued || now - lastRouteCheck < 2000 || now - lastOutputChange < 2000) return;
+        lastRouteCheck = now; routeCheckQueued = true;
+        app.jobs.execute(() -> {
+            updateRoute();
+            app.main.post(() -> routeCheckQueued = false);
+        });
+    }
     public JSONObject snapshot() { return snapshot(false); }
     /** Listening stats grow with the library; the UI asks for them only every few seconds. */
     public JSONObject snapshot(boolean withStats) {
+        refreshRoute();
         JSONObject track = currentTrack();
         JSONObject state = json("id", track == null ? "" : track.optString("id"), "preferenceContinuation", track != null && track.optString("id").equals(preferenceCarryId), "position", player.getCurrentPosition() / 1000d,
             "duration", player.getDuration() > 0 ? player.getDuration() / 1000d : track == null ? 0 : track.optDouble("duration"),
@@ -658,7 +686,6 @@ public final class PlaybackService extends MediaSessionService {
     @Override public MediaSession onGetSession(MediaSession.ControllerInfo controller) { return session; }
     @Override public void onDestroy() {
         destroyed = true;
-        ((AudioManager) getSystemService(AUDIO_SERVICE)).unregisterAudioDeviceCallback(routeChanges);
         app.main.removeCallbacks(tick); app.main.removeCallbacks(fadeTick); app.main.removeCallbacks(deferredSave); fileRequest++; if (historyPending) deferredSave.run(); savePosition(); app.save("tools", stats); loudness.shutdown();
         if (session != null) session.release(); if (player != null) player.release(); app.playback = null; super.onDestroy();
     }

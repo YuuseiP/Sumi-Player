@@ -49,7 +49,14 @@ public final class UiMotionDeviceTest extends InstrumentationTestCase {
     private void capture(File directory,String name) throws Exception {
         android.graphics.Bitmap bitmap=getInstrumentation().getUiAutomation().takeScreenshot();assertNotNull(bitmap);
         try(FileOutputStream out=new FileOutputStream(new File(directory,name+".png"))){bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}finally{bitmap.recycle();}
-        Thread.sleep(400); // Screenshot readback must not contaminate the following timing sample.
+        Thread.sleep(400);
+    }
+    /** The lyric steps must not depend on which song was last playing; a queued song leaves the queue unchanged. */
+    private String queuedSongWithLyrics(PlayerApp app) throws Exception {
+        String[][] ids={null};
+        getInstrumentation().runOnMainSync(()->{int count=app.playback.player.getMediaItemCount();ids[0]=new String[count];for(int i=0;i<count;i++)ids[0][i]=app.playback.player.getMediaItemAt(i).mediaId;});
+        for(String id:ids[0])if(app.library.details(id).optString("lyrics").contains("["))return id;
+        return null;
     }
     public void testMotionAndPlayback() throws Exception {
         assertEquals("Physical M3X","Shanling M3X",android.os.Build.MODEL.replace('_',' '));
@@ -63,6 +70,9 @@ public final class UiMotionDeviceTest extends InstrumentationTestCase {
         JSONObject scan=new JSONObject(app.library.scanStatus().toString());int tracks=app.library.all().size();
         JSONObject original=new JSONObject(js("nativeCommand('poll')"));
         assertEquals("No active sleep timer",0,original.optLong("sleepRemaining"));
+        String queue=js("nativeCommand('queue').ids");
+        android.view.accessibility.AccessibilityManager accessibility=(android.view.accessibility.AccessibilityManager)app.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE);
+        assertFalse("Accessibility inflates WebView timing; a screen reader or UiAutomation is connected",accessibility.isEnabled());
         File directory=new File(app.getExternalFilesDir(null),"motion-"+phase);assertTrue(directory.isDirectory()||directory.mkdirs());
         JSONObject evidence=new JSONObject().put("phase",phase).put("device",android.os.Build.MODEL).put("tracks",tracks).put("samples",samples);
         Map<String,Object> savedFields=new LinkedHashMap<>();
@@ -118,7 +128,8 @@ public final class UiMotionDeviceTest extends InstrumentationTestCase {
                 Thread.sleep(400);
                 assertEquals("Final mini cover agrees","true",js("document.querySelector('.m3x-mini-cover').getAttribute('src')===(M3X_UI.currentTrack().cover||'cover-placeholder.svg')"));
                 assertFalse("Real track switch exercised",id.equals(js("M3X_UI.currentTrack().id")));
-                act("M3X_UI.showTrack("+JSONObject.quote(original.getString("id"))+");document.getElementById('audio').pause()");
+                String lyricSong=queuedSongWithLyrics(app);assertNotNull("Queued song with timed lyrics",lyricSong);
+                act("M3X_UI.showTrack("+JSONObject.quote(lyricSong)+");document.getElementById('audio').pause()");
                 act(click("[data-page=lyrics]"));waitJs("document.querySelectorAll('#lyrics-lines button').length>3");
                 act("var lines=document.querySelectorAll('#lyrics-lines button');M3X_MOTION.centerLyric(lines[lines.length-1]);M3X_MOTION.centerLyric(lines[2]);");
                 Thread.sleep(350);
@@ -131,11 +142,16 @@ public final class UiMotionDeviceTest extends InstrumentationTestCase {
                 act("M3X_UI.openDialog(document.getElementById('output-dialog'));M3X_UI.closeDialog(document.getElementById('output-dialog'))");
                 assertEquals("Reduced sheet closes immediately","false",js("document.getElementById('output-dialog').open"));
                 act("var e=document.querySelector('[data-setting=reduceMotion]');e.checked=false;e.dispatchEvent(new Event('change',{bubbles:true}))");
-                setting("theme","dark");measure("theme-dark-navigation",click(".m3x-nav [data-page=player]"));capture(directory,"dark-player");
-                measure("dark-sheet",click(".m3x-output"));capture(directory,"dark-sheet");act("M3X_UI.closeDialog(document.getElementById('output-dialog'),true)");
-                setting("theme","light");measure("theme-light-navigation",click(".m3x-nav [data-page=library]"));capture(directory,"light-library");
+                setting("theme","dark");measure("theme-dark-navigation",click(".m3x-nav [data-page=player]"));
+                measure("dark-sheet",click(".m3x-output"));act("M3X_UI.closeDialog(document.getElementById('output-dialog'),true)");Thread.sleep(700);
+                setting("theme","light");measure("theme-light-navigation",click(".m3x-nav [data-page=library]"));
                 setting("visualTheme","classic");measure("classic-navigation",click(".m3x-nav [data-page=player]"));
                 assertEquals("Classic appearance has its own motion set","\"classic\"",js("document.querySelector('.m3x-screen').dataset.motion"));
+                assertFalse("Accessibility stayed off for every timed step",accessibility.isEnabled());
+                // Screenshots connect UiAutomation, which enables accessibility and slows WebView for the rest of the process: keep them after all timing.
+                setting("visualTheme","endfield");setting("theme","dark");act(click(".m3x-nav [data-page=player]"));Thread.sleep(900);capture(directory,"dark-player");
+                act(click(".m3x-output"));Thread.sleep(900);capture(directory,"dark-sheet");act("M3X_UI.closeDialog(document.getElementById('output-dialog'),true)");Thread.sleep(700);
+                setting("theme","light");act(click(".m3x-nav [data-page=library]"));Thread.sleep(900);capture(directory,"light-library");
             }
             assertEquals("Catalog unchanged",tracks,app.library.all().size());assertEquals("No scan",scan.toString(),app.library.scanStatus().toString());
             evidence.put("passed",true);
@@ -147,7 +163,10 @@ public final class UiMotionDeviceTest extends InstrumentationTestCase {
                     for(Map.Entry<String,Object> entry:savedFields.entrySet())field(entry.getKey()).set(app.playback,entry.getValue());
                     field("stats").set(app.playback,new JSONObject(savedStats.toString()));field("lastStats").setLong(app.playback,SystemClock.elapsedRealtime());field("lastSave").setLong(app.playback,SystemClock.elapsedRealtime());
                     app.playback.player.setVolume(volume[0]);app.save("ui",savedUi);app.save("tools",savedTools);app.playback.player.setPlayWhenReady(!original.getBoolean("paused"));
+                    org.json.JSONArray restoredQueue=new org.json.JSONArray();for(int i=0;i<app.playback.player.getMediaItemCount();i++)restoredQueue.put(app.playback.player.getMediaItemAt(i).mediaId);
+                    evidence.put("queueRestored",queue.equals(restoredQueue.toString())).put("restoredTrackId",app.playback.currentTrack().getString("id"));
                 }catch(Exception e){throw new RuntimeException(e);}});
+                assertTrue("Queue restored",evidence.getBoolean("queueRestored"));assertEquals("Original track restored",original.getString("id"),evidence.getString("restoredTrackId"));
                 evidence.put("uiRestored",savedUi.toString().equals(app.settings("ui").toString())).put("toolsRestored",savedTools.toString().equals(app.settings("tools").toString())).put("audioSettingsPreserved",savedAudio.toString().equals(app.settings("audio").toString()));
                 try(FileOutputStream out=new FileOutputStream(new File(directory,"results.json"))){out.write(evidence.toString(2).getBytes("UTF-8"));}
                 assertTrue("UI restored",evidence.getBoolean("uiRestored"));assertTrue("Tools restored",evidence.getBoolean("toolsRestored"));assertTrue("Audio settings preserved",evidence.getBoolean("audioSettingsPreserved"));
