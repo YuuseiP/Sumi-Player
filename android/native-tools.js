@@ -99,9 +99,9 @@
       const header = document.createElement("header"); header.className = "m3x-sheet-header";
       const name = document.createElement("h2"); name.textContent = title;
       const close = document.createElement("button"); close.className = "m3x-icon"; close.textContent = "×";
-      close.addEventListener("click", () => ui.closeDialog(dialog, true)); header.append(name, close); content.append(header);
+      close.addEventListener("click", () => ui.closeDialog(dialog)); header.append(name, close); content.append(header);
       dialog.append(scrim, content); root.querySelector(".m3x-screen").append(dialog);
-      dialog.addEventListener("click", event => { if (event.target === scrim) ui.closeDialog(dialog, true); });
+      dialog.addEventListener("click", event => { if (event.target === scrim) ui.closeDialog(dialog); });
       // Dynamic native sheets need the same Android 7.1 dialog fallback as static sheets.
       if (!dialog.showModal) {
         Object.defineProperty(dialog, "open", { get() { return this.hasAttribute("open"); } });

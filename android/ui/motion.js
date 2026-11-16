@@ -175,7 +175,9 @@
   // every frame of the glide, and a modal dialog's inert state would restyle them
   // when it opens and closes, so they go cold for the duration.
   let warmTimer = 0, transitionAt = -Infinity;
-  const isWarm = page => TOP.includes(page) && "warm" in panel(page).dataset;
+  // The warm set follows the source mode: 发现 / 播放 / 我的 in NetEase mode, 曲库 / 播放 / 我的 locally.
+  const ALL_TOP = ["library", "player", "profile", "netease", "netease-me"];
+  const isWarm = page => top().includes(page) && !!panel(page) && "warm" in panel(page).dataset;
   function warmLater(delay) {
     clearTimeout(warmTimer);
     warmTimer = setTimeout(() => {
@@ -184,11 +186,12 @@
       if (wait > 0) { warmLater(wait); return; }
       if (screen.querySelector("dialog[open]")) return; // Its close event comes back here.
       // One page per step, so the main thread stays responsive between them.
-      const page = TOP.find(name => !isWarm(name));
+      ALL_TOP.forEach(name => { if (!top().includes(name) && panel(name)) delete panel(name).dataset.warm; });
+      const page = top().find(name => panel(name) && !isWarm(name));
       if (page) { panel(page).dataset.warm = ""; warmLater(400); }
     }, delay);
   }
-  function coolPages() { clearTimeout(warmTimer); TOP.forEach(name => { delete panel(name).dataset.warm; }); }
+  function coolPages() { clearTimeout(warmTimer); ALL_TOP.forEach(name => { if (panel(name)) delete panel(name).dataset.warm; }); }
   function recolor() { coolPages(); warmLater(1500); }
   screen.addEventListener("close", () => warmLater(800), true);
   // Statistics: bars grow from their baselines in reading order.
@@ -295,7 +298,8 @@
     if (visible(texts[0])) texts.forEach((element, index) => settle(run(element, [{ opacity: 0, transform: `translate3d(${direction * 18}px,0,0)` }, { opacity: 1, transform: "none" }],
       { duration: 440, delay: 60 + index * 45, easing: EASE.emph, fill: "backwards" })));
     const miniText = screen.querySelector(".m3x-mini-text");
-    if (visible(miniText)) settle(run(miniText, [{ opacity: 0, transform: `translate3d(0,${direction * 8}px,0)` }, { opacity: 1, transform: "none" }], { duration: 360, easing: EASE.emph }));
+    // A swipe on the mini player brings the new song in sideways itself.
+    if (visible(miniText) && !miniText.closest("[data-swiping]")) settle(run(miniText, [{ opacity: 0, transform: `translate3d(0,${direction * 8}px,0)` }, { opacity: 1, transform: "none" }], { duration: 360, easing: EASE.emph }));
     backdrop();
   }
 

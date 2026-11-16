@@ -90,7 +90,7 @@ public final class UiFrameProbeTest extends InstrumentationTestCase {
         PlayerApp app = PlayerApp.instance; app.awaitLibrary();
         activity = (MainActivity) getInstrumentation().startActivitySync(new Intent(getInstrumentation().getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         getInstrumentation().runOnMainSync(() -> activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON | android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD));
-        waitJs("!!window.M3X_UI&&!!nativeCommand('poll').stats&&M3X_UI.tracks.length>0");
+        waitJs("!!window.M3X_UI&&!!nativeCommand('poll',{stats:true}).stats&&M3X_UI.tracks.length>0");
         AccessibilityManager accessibility = (AccessibilityManager) app.getSystemService(Context.ACCESSIBILITY_SERVICE);
         assertFalse("Accessibility inflates WebView timing; a screen reader or UiAutomation is connected", accessibility.isEnabled());
         HandlerThread metricsThread = new HandlerThread("frame-metrics"); metricsThread.start();
@@ -98,7 +98,7 @@ public final class UiFrameProbeTest extends InstrumentationTestCase {
         getInstrumentation().runOnMainSync(() -> activity.getWindow().addOnFrameMetricsAvailableListener(metrics, new Handler(metricsThread.getLooper())));
         JSONObject savedUi = new JSONObject(app.settings("ui").toString()), savedTools = new JSONObject(app.settings("tools").toString()), savedAudio = new JSONObject(app.settings("audio").toString());
         JSONObject scan = new JSONObject(app.library.scanStatus().toString()); int tracks = app.library.all().size();
-        JSONObject original = new JSONObject(js("nativeCommand('poll')"));
+        JSONObject original = new JSONObject(js("nativeCommand('poll',{stats:true})"));
         File directory = new File(app.getExternalFilesDir(null), "frames-" + label); assertTrue(directory.isDirectory() || directory.mkdirs());
         JSONObject evidence = new JSONObject().put("label", label).put("device", android.os.Build.MODEL).put("tracks", tracks).put("samples", samples);
         Map<String, Object> savedFields = new LinkedHashMap<>();

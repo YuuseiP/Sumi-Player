@@ -1,14 +1,14 @@
-# 澄 · M3X Player
+# 澄 · Sumi-Player
 
-面向山灵 M3X 的本地音乐播放器，包含 Android 原生播放服务、内置 WebView 界面和内置的歌手署名分类配置。当前版本为 **0.6.0**，Android 应用 ID 为 `cn.yuusei.m3x`。
+面向山灵 M3X 的本地与网易云音乐播放器，包含 Android 原生播放服务、内置 WebView 界面和内置的歌手署名分类配置。当前版本为 **1.0.1**（首个正式版），Android 应用 ID 为 `cn.yuusei.m3x`，桌面名称仍为「澄」。项目原名 M3X-Player，自 1.0.1 起更名为 Sumi-Player。
 
-本项目不是山灵官方产品。面向 Android 7.1 / API 25；0.4.0 已在 M3X 真机验证 FLAC 软解、扫描恢复和 96kHz PCM DIRECT 系统输出，尚未完成实听、DAC 模拟输出测量与长期播放验证。
+本项目不是山灵官方产品。面向 Android 7.1 / API 25；已在 M3X 真机验证 FLAC 软解、扫描恢复和 96kHz PCM DIRECT 系统输出，尚未完成实听、DAC 模拟输出测量与长期播放验证。
 
 ## 下载与安装
 
-0.6.0 新增列表/双列网格、封面动态配色、终末地工业主题、歌词更多菜单和听歌图表，沿用原发布签名，可覆盖安装。主题入口为「我的 → 设置 → 界面主题」。实际 M3X 验证和边界见 [0.6.0 验证报告](android/APPEARANCE_060_VERIFICATION.md)，视觉研究见 [终末地参考](android/ENDFIELD_VISUAL_REFERENCES.md)。
+1.0.1 带来设计系统 2.0 前端（全新动效与转场、悬浮迷你播放器、暖页切换）、网易云音乐模式、响度均衡、听歌喜好、迷你播放条滑动切歌、双语歌词和歌词候选预检，详见 [发布说明](RELEASE_NOTES.md)。沿用原发布签名与应用 ID，可直接覆盖安装 0.x 版本，曲库、歌单、播放记录和登录状态保留。
 
-从 [0.6.0 Release](../../releases/tag/v0.6.0) 下载 `Cheng-M3X-0.6.0.apk`、`.apk.sha256` 校验文件与 `verification-0.6.0.json` 验证记录；本机构建输出位于 `dist/`。历史版本保留在 [Releases](../../releases) 中。
+从 [1.0.1 Release](../../releases/tag/v1.0.1) 下载 `Sumi-Player-1.0.1.apk` 与 `.apk.sha256` 校验文件；本机构建输出位于 `dist/`。历史版本保留在 [Releases](../../releases) 中。
 
 1. 将 APK 复制到设备，使用文件管理器打开并按系统提示允许安装。
 2. 首次启动授予读取音乐的权限，或在「我的 → 设置 → 添加扫描目录」授权音乐文件夹。
@@ -17,8 +17,8 @@
 在下载目录校验 APK：
 
 ```powershell
-$expected = ((Get-Content -Raw -Encoding UTF8 '.\Cheng-M3X-0.6.0.apk.sha256').Trim() -split '\s+')[0]
-$actual = (Get-FileHash -LiteralPath '.\Cheng-M3X-0.6.0.apk' -Algorithm SHA256).Hash
+$expected = ((Get-Content -Raw -Encoding UTF8 '.\Sumi-Player-1.0.1.apk.sha256').Trim() -split '\s+')[0]
+$actual = (Get-FileHash -LiteralPath '.\Sumi-Player-1.0.1.apk' -Algorithm SHA256).Hash
 if ($actual -ne $expected) { throw 'APK SHA-256 mismatch' }
 ```
 
@@ -30,7 +30,8 @@ if ($actual -ne $expected) { throw 'APK SHA-256 mismatch' }
 - 声音处理：十段 EQ、32 段参数 EQ、ReplayGain、AutoEQ 参数导入、混响、压限和手动重采样。
 - 歌词：QQ／网易云联网检索、候选预览、曲名／歌手／专辑／整曲偏差标注、离线采用、双语 LRC 写入歌曲标签和完整文件恢复。
 - 扩展功能：LRC 歌词、WebDAV / DLNA 浏览播放、片段导出、倒放，以及设置与歌单备份。
-- 界面：浅色/深色、经典/终末地主题、列表/双列网格、封面动态配色、两种播放布局、收藏封面预览与听歌图表；外观通过 ADB 真机截图与本地网页批注审阅。
+- 网易云音乐：扫码／网页登录、每日推荐、私人FM、心动模式、歌单与搜索、下拉换一批推荐歌单、在线播放与歌词。
+- 界面：设计系统 2.0（颜色令牌平滑过渡、可打断的合成层动效、封面飞行、抽屉拖拽关闭、暖页切换）、浅色/深色、经典/终末地主题、列表/双列网格、两种播放布局、迷你播放条左右滑动切歌、双语歌词与线性缩放、收藏封面预览与听歌图表；外观通过 ADB 真机截图与本地网页批注审阅。
 
 逐项状态及验收边界见 [Android 实现记录](M3X-Android-Implementation.md)。
 

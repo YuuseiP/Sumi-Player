@@ -1,5 +1,5 @@
 /* ==========================================================================
-   澄 · M3X Player — design system 2.0
+   澄 · Sumi Player — design system 2.0
    Target: Shanling M3X (Snapdragon 430 / Adreno 505, 384×616 CSS px, DPR 2),
    Android System WebView Chromium 119. Motion is compositor-only (transform /
    opacity); colour tokens are registered so theme and cover palettes glide.
@@ -450,7 +450,6 @@ html[data-theme=dark] #m3x-concept .m3x-feedback[data-error=true] { color: #ffb4
 #m3x-concept #song-artist-choices span { min-width: 0; overflow-wrap: break-word; }
 #m3x-concept .m3x-lyric-preview { max-height: 320px; overflow: auto; margin-top: 16px; }
 #m3x-concept .m3x-lyric-preview [aria-current=true] { color: var(--m3x-accent); font-weight: 700; }
-#m3x-concept .m3x-lyric-results { max-height: 220px; overflow: auto; }
 
 /* --- Settings ----------------------------------------------------------- */
 #m3x-concept .m3x-settings-body { flex: 1; min-height: 0; padding-bottom: 20px; }
@@ -752,128 +751,158 @@ html[data-theme=dark] #m3x-concept [data-visual-theme=endfield] .m3x-player::bef
   #m3x-concept *, #m3x-concept *::before, #m3x-concept *::after { animation: none !important; transition: none !important; }
 }
 
-/* ==== Ported from 0.6.x main: NetEase mode and 1.0 features (restyled below) ==== */
-#m3x-concept .m3x-mini-open{overflow:hidden;touch-action:pan-y;}
-#m3x-concept .m3x-lyric-results .m3x-lyric-probe { flex-shrink: 0; white-space: nowrap; font-size: 11px; color: var(--m3x-accent); }
-#m3x-concept .m3x-lyric-results [data-lyrics=none] { opacity: .5; }
-#m3x-concept .m3x-lyric-results [aria-current=true] { color: var(--m3x-accent); font-weight: 600; }
-#m3x-concept .m3x-lyric-results [data-lyrics=none] .m3x-lyric-probe { color: var(--m3x-muted); }
-/* Lyrics: original and translation in different colours; the current line grows linearly to full size,
-   the others fade and shrink. */
-#m3x-concept .m3x-lyric-line{display:flex;flex-direction:column;align-items:flex-start;gap:1px;opacity:.42;transform:scale(.86);transform-origin:left center;transition:opacity 320ms linear,transform 320ms linear,text-shadow 320ms linear;}
-#m3x-concept .m3x-lyric-line[aria-current=true]{opacity:1;transform:scale(1);text-shadow:0 0 12px rgba(128,128,128,.24);}
-#m3x-concept .m3x-lyric-main{display:block;color:var(--m3x-fg);font-weight:600;}
-#m3x-concept .m3x-lyric-trans{display:block;color:var(--m3x-accent);font-size:.8em;font-weight:500;line-height:1.55;}
-html[data-theme=dark] #m3x-concept .m3x-lyric-line[aria-current=true]{text-shadow:0 0 10px rgba(255,255,255,.22),0 0 22px rgba(255,255,255,.1);}
-#m3x-concept [data-motion-reduced=true] .m3x-lyric-line{transform:none;transition:none;}
-#m3x-concept #ambient-lines p{margin:0;padding:10px 4px;color:#eee;font-size:18px;line-height:1.65;white-space:pre-wrap;overflow-wrap:break-word;font-weight:600;opacity:.3;transform:scale(.86);transition:opacity 320ms linear,color 320ms linear,text-shadow 320ms linear,transform 320ms linear;}
-#m3x-concept #ambient-lines p[data-distance=near]{opacity:.52;}
-#m3x-concept #ambient-lines .m3x-lyric-main{display:block;color:#fff;}
-#m3x-concept #ambient-lines .m3x-lyric-trans{display:block;color:#f0cd8e;font-size:.82em;font-weight:500;line-height:1.55;}
-#m3x-concept [data-motion-reduced=true] #ambient-lines p{transform:none;transition:none;}
+/* ==== 1.0 · features added on top of design system 2.0 ==== */
+/* Mini player swipe: horizontal drags change track; the strip clips its content only while it moves. */
+#m3x-concept .m3x-mini-open { touch-action: pan-y; }
+#m3x-concept .m3x-mini-open[data-swiping] { overflow: hidden; }
+/* 1.0 · Bilingual lyrics: original and translation in separate colours. The current line grows to full
+   size with a linear transition while the others fade and shrink; the glow and weight come from above. */
+#m3x-concept .m3x-lyric-line { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; opacity: .42; transform: scale(.86); transform-origin: left center;
+  transition: opacity 320ms linear, transform 320ms linear, text-shadow 320ms linear, box-shadow var(--dur-2) var(--ease-out), padding var(--dur-2) var(--ease-out); }
+#m3x-concept .m3x-lyric-line[aria-current=true] { opacity: 1; transform: scale(1); }
+#m3x-concept .m3x-lyric-main { display: block; color: var(--m3x-fg); font-weight: 600; }
+#m3x-concept .m3x-lyric-line[aria-current=true] .m3x-lyric-main { font-weight: 700; }
+#m3x-concept .m3x-lyric-trans { display: block; color: var(--m3x-accent); font-size: .8em; font-weight: 500; line-height: 1.55; }
+#m3x-concept [data-motion-reduced=true] .m3x-lyric-line { transform: none; transition: none; }
+#m3x-concept #ambient-lines p { opacity: .3; transform: scale(.86); transition: opacity 320ms linear, color 320ms linear, text-shadow 320ms linear, transform 320ms linear; }
+#m3x-concept #ambient-lines p[data-distance=near] { opacity: .52; }
+#m3x-concept #ambient-lines .m3x-lyric-main { display: block; color: #fff; }
+#m3x-concept #ambient-lines .m3x-lyric-trans { display: block; color: #f0cd8e; font-size: .82em; font-weight: 500; line-height: 1.55; }
+#m3x-concept [data-motion-reduced=true] #ambient-lines p { transform: none; transition: none; }
 
-/* ---- NetEase mode -------------------------------------------------------------------------------- */
+/* ==== NetEase mode · design system 2.0 ======================================================
+   Same tokens as the local pages: radii (all 0 in Endfield), raised surfaces, hairlines,
+   on-accent text and the shared press feedback. */
 #m3x-concept .m3x-screen[data-source="netease"] .m3x-nav [data-source="local"],
 #m3x-concept .m3x-screen:not([data-source="netease"]) .m3x-nav [data-source="netease"] { display: none; }
+
+/* Source tabs: the home-page title doubles as the 曲库 | 网易云 switch. */
+#m3x-concept .m3x-source-tabs { display: flex; align-items: baseline; gap: 14px; flex-shrink: 0; white-space: nowrap; }
+#m3x-concept .m3x-source-tabs button { min-height: 44px; padding: 0; font: inherit; color: var(--m3x-fg); transition: color var(--dur-2) var(--ease-out); }
+#m3x-concept .m3x-source-tabs button[aria-pressed="false"] { font-size: 17px; font-weight: 500; color: var(--m3x-muted); }
+#m3x-concept [data-panel="library"] .m3x-page-heading, #m3x-concept [data-panel="netease"] .m3x-page-heading { display: flex; align-items: center; gap: 12px; }
+#m3x-concept .m3x-heading-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--m3x-muted); }
+#m3x-concept [data-panel="netease-me"] > .m3x-heading { margin-bottom: 0; }
+
+/* Shared press feedback for NetEase rows and cards. */
+#m3x-concept :is(.m3x-ne-row, .m3x-ne-song, .m3x-ne-setting, .m3x-ne-playall) { position: relative; }
+#m3x-concept :is(.m3x-ne-row, .m3x-ne-song, .m3x-ne-setting, .m3x-ne-playall)::after {
+  content: ""; position: absolute; inset: 0 -8px; border-radius: var(--r-sm); background: var(--m3x-state);
+  opacity: 0; pointer-events: none; transition: opacity var(--dur-3) var(--ease-out); }
+#m3x-concept .is-pressed:is(.m3x-ne-row, .m3x-ne-song, .m3x-ne-setting, .m3x-ne-playall)::after { opacity: 1; transition-duration: var(--dur-press); }
+#m3x-concept :is(.m3x-ne-card, .m3x-ne-tile, .m3x-ne-entry, .m3x-ne-chip, .m3x-ne-pill) { transition: transform var(--dur-3) var(--ease-spring), background-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out); }
+#m3x-concept .is-pressed:is(.m3x-ne-card, .m3x-ne-tile, .m3x-ne-entry, .m3x-ne-chip, .m3x-ne-pill) { transform: scale(.96); transition-duration: var(--dur-press); transition-timing-function: var(--ease-out); }
+
+/* Discover */
 #m3x-concept .m3x-ne-searchbar { display: flex; align-items: center; gap: 6px; margin: 2px 0 6px; }
 #m3x-concept .m3x-ne-searchbar .m3x-search { flex: 1; min-width: 0; }
-#m3x-concept .m3x-ne-label { font-size: 12px; color: var(--m3x-muted); margin: 14px 0 8px; }
+#m3x-concept .m3x-ne-label { font-size: 12px; font-weight: 700; color: var(--m3x-muted); margin: 18px 0 8px; }
 #m3x-concept .m3x-ne-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-#m3x-concept .m3x-ne-chip { min-height: 32px; padding: 0 12px; border-radius: 16px; background: var(--m3x-surface); font-size: 12px; color: var(--m3x-fg); }
+#m3x-concept .m3x-ne-chip { min-height: 34px; padding: 0 14px; border-radius: var(--r-pill); background: var(--m3x-surface); font-size: 12px; color: var(--m3x-fg); }
 #m3x-concept .m3x-ne-chip b { color: var(--m3x-accent); margin-right: 6px; font-weight: 700; }
-#m3x-concept .m3x-ne-banner { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 8px 0 2px; border-radius: 10px; background: var(--m3x-surface); }
-#m3x-concept .m3x-ne-banner p { flex: 1; margin: 0; font-size: 12px; line-height: 1.5; }
-#m3x-concept .m3x-ne-pill { min-height: 34px; padding: 0 14px; border-radius: 17px; background: var(--m3x-accent); color: var(--m3x-bg); font-size: 12px; font-weight: 500; flex-shrink: 0; }
+#m3x-concept .m3x-ne-banner { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin: 10px 0 2px; border-radius: var(--r-lg); background: var(--m3x-accent-soft); }
+#m3x-concept .m3x-ne-banner p { flex: 1; margin: 0; font-size: 12px; line-height: 1.55; }
+#m3x-concept .m3x-ne-pill { min-height: 36px; padding: 0 16px; border-radius: var(--r-pill); background: var(--m3x-accent); color: var(--m3x-on-accent); font-size: 12px; font-weight: 700; flex-shrink: 0; }
 #m3x-concept .m3x-ne-pill.m3x-ne-ghost { background: transparent; color: var(--m3x-accent); box-shadow: inset 0 0 0 1px var(--m3x-accent); }
-#m3x-concept .m3x-ne-entries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 14px 0 4px; }
-#m3x-concept .m3x-ne-entry { display: flex; flex-direction: column; align-items: center; gap: 7px; min-height: 80px; font-size: 11px; color: var(--m3x-fg); }
-#m3x-concept .m3x-ne-entry > b { position: relative; width: 50px; height: 50px; display: grid; place-items: center; border-radius: 50%; background: var(--m3x-accent); color: var(--m3x-bg); font-size: 16px; }
+#m3x-concept .m3x-ne-entries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 24px 0 6px; }
+#m3x-concept .m3x-ne-entry { display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 84px; font-size: 12px; color: var(--m3x-fg); }
+#m3x-concept .m3x-ne-entry > b { position: relative; width: 52px; height: 52px; display: grid; place-items: center; border-radius: 50%; background: var(--m3x-accent); color: var(--m3x-on-accent); font-size: 16px;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--m3x-accent) 28%, transparent); }
 #m3x-concept .m3x-ne-entry svg { width: 22px; height: 22px; }
-#m3x-concept .m3x-ne-entry > b > em { position: absolute; top: 19px; font-style: normal; font-size: 12px; font-weight: 700; }
-#m3x-concept .m3x-ne-section { padding-top: 6px; }
+#m3x-concept .m3x-ne-entry > b.m3x-ne-day { font-size: 19px; font-weight: 700; }
+#m3x-concept .m3x-ne-section { padding-top: 4px; }
+#m3x-concept .m3x-ne-section .m3x-section-heading { padding: 20px 0 10px; }
+#m3x-concept .m3x-ne-section .m3x-section-heading .m3x-text-button { margin-right: -10px; font-size: 12px; }
+#m3x-concept .m3x-ne-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 10px; padding-bottom: 12px; }
+#m3x-concept .m3x-ne-card { position: relative; display: block; min-width: 0; text-align: left; color: var(--m3x-fg); }
+#m3x-concept .m3x-ne-card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--r-md); background: var(--m3x-surface); box-shadow: var(--m3x-shadow-1); }
+#m3x-concept .m3x-ne-card > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 7px; font-size: 12px; line-height: 1.45; word-break: break-word; }
+#m3x-concept .m3x-ne-card > small { position: absolute; top: 5px; right: 5px; padding: 1px 7px; border-radius: var(--r-pill); background: #00000070; color: #fff; font-size: 10px; line-height: 16px; }
+
+/* Pull to refresh */
 #m3x-concept .m3x-ne-pull { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 8px; height: 36px; margin-bottom: -36px; font-size: 12px; color: var(--m3x-muted); pointer-events: none; opacity: 0; transform: translateY(-44px); }
 #m3x-concept .m3x-ne-pull > i { width: 14px; height: 14px; box-sizing: border-box; border: 2px solid currentColor; border-top-color: transparent; border-left-color: transparent; border-radius: 1px; margin-top: -6px; }
 #m3x-concept .m3x-ne-pull[data-ready=true] { color: var(--m3x-accent); }
 #m3x-concept .m3x-ne-pull[data-loading=true] > i { margin-top: 0; border-radius: 50%; border-color: currentColor; border-top-color: transparent; animation: m3x-ne-spin 800ms linear infinite; }
 @keyframes m3x-ne-spin { to { transform: rotate(360deg); } }
 #m3x-concept [data-motion-reduced=true] .m3x-ne-pull[data-loading=true] > i { animation: none; }
-#m3x-concept .m3x-ne-section .m3x-section-heading { padding: 14px 0 10px; }
-#m3x-concept .m3x-ne-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 10px; }
-#m3x-concept .m3x-ne-card { position: relative; display: block; min-width: 0; text-align: left; color: var(--m3x-fg); }
-#m3x-concept .m3x-ne-card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--m3x-cover-radius); background: var(--m3x-surface); }
-#m3x-concept .m3x-ne-card > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 6px; font-size: 11px; line-height: 1.45; word-break: break-word; }
-#m3x-concept .m3x-ne-card > small { position: absolute; top: 4px; right: 4px; padding: 1px 6px; border-radius: 8px; background: #0000006b; color: #fff; font-size: 10px; }
-#m3x-concept .m3x-ne-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 6px 0; text-align: left; border-bottom: 1px solid var(--m3x-border); color: var(--m3x-fg); }
-#m3x-concept .m3x-ne-row img { width: 48px; height: 48px; flex-shrink: 0; object-fit: cover; border-radius: var(--m3x-cover-radius); background: var(--m3x-surface); }
+
+/* Lists: playlists, songs, collection hero */
+#m3x-concept .m3x-ne-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 8px 0; text-align: left; color: var(--m3x-fg); }
+#m3x-concept .m3x-ne-row img { width: 48px; height: 48px; flex-shrink: 0; object-fit: cover; border-radius: var(--r-sm); background: var(--m3x-surface); }
 #m3x-concept .m3x-ne-row > span { flex: 1; min-width: 0; }
 #m3x-concept .m3x-ne-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
 #m3x-concept .m3x-ne-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; font-size: 11px; color: var(--m3x-muted); }
 #m3x-concept .m3x-ne-row > i { font-style: normal; font-size: 11px; color: var(--m3x-muted); flex-shrink: 0; }
 #m3x-concept .m3x-ne-songs { padding-bottom: 12px; }
-#m3x-concept .m3x-ne-song { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px; text-align: left; color: var(--m3x-fg); }
-#m3x-concept .m3x-ne-song > em { width: 26px; flex-shrink: 0; text-align: center; font-style: normal; font-size: 13px; color: var(--m3x-muted); }
-#m3x-concept .m3x-ne-song > img { width: 42px; height: 42px; flex-shrink: 0; object-fit: cover; border-radius: var(--m3x-cover-radius); background: var(--m3x-surface); }
-#m3x-concept .m3x-ne-song > span { flex: 1; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--m3x-border); }
-#m3x-concept .m3x-ne-song strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 400; }
+#m3x-concept .m3x-ne-song { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 62px; padding: 7px 0; text-align: left; color: var(--m3x-fg); }
+#m3x-concept .m3x-ne-song > em { width: 28px; flex-shrink: 0; text-align: center; font-style: normal; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--m3x-muted); }
+#m3x-concept .m3x-ne-song > img { width: 46px; height: 46px; flex-shrink: 0; object-fit: cover; border-radius: var(--r-sm); background: var(--m3x-surface); transition: box-shadow var(--dur-2) var(--ease-out); }
+#m3x-concept .m3x-ne-song > span { flex: 1; min-width: 0; }
+#m3x-concept .m3x-ne-song strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 400; transition: color var(--dur-2) var(--ease-out); }
 #m3x-concept .m3x-ne-song small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; font-size: 11px; color: var(--m3x-muted); }
-#m3x-concept .m3x-ne-song[aria-current="true"] strong, #m3x-concept .m3x-ne-song[aria-current="true"] > em { color: var(--m3x-accent); font-weight: 500; }
+#m3x-concept .m3x-ne-song[aria-current="true"] strong, #m3x-concept .m3x-ne-song[aria-current="true"] > em { color: var(--m3x-accent); font-weight: 700; }
+#m3x-concept .m3x-ne-song[aria-current="true"] > img { box-shadow: 0 0 0 2px var(--m3x-accent); }
 #m3x-concept .m3x-ne-song[data-available="false"] { opacity: .42; }
-#m3x-concept .m3x-ne-tag { display: inline-block; vertical-align: 1px; margin-right: 5px; padding: 0 3px; border: 1px solid currentColor; border-radius: 3px; font-size: 9px; line-height: 13px; font-style: normal; color: var(--m3x-accent); }
-#m3x-concept .m3x-ne-hero { display: flex; gap: 14px; padding: 8px 0 14px; }
-#m3x-concept .m3x-ne-hero img { width: 116px; height: 116px; flex-shrink: 0; object-fit: cover; border-radius: var(--m3x-cover-radius); background: var(--m3x-surface); }
+#m3x-concept .m3x-ne-tag { display: inline-block; vertical-align: 1px; margin-right: 5px; padding: 0 4px; border: 1px solid currentColor; border-radius: var(--r-xs); font-size: 9px; line-height: 13px; font-style: normal; color: var(--m3x-accent); }
+#m3x-concept .m3x-ne-hero { display: flex; gap: 16px; padding: 10px 0 16px; }
+#m3x-concept .m3x-ne-hero img { width: 120px; height: 120px; flex-shrink: 0; object-fit: cover; border-radius: var(--r-lg); background: var(--m3x-surface); box-shadow: var(--m3x-shadow-2); }
 #m3x-concept .m3x-ne-hero > div { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-#m3x-concept .m3x-ne-hero h3 { margin: 0; font-size: 17px; font-weight: 500; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-#m3x-concept .m3x-ne-hero p { margin: 6px 0 0; font-size: 11px; color: var(--m3x-muted); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-#m3x-concept .m3x-ne-playall { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; border-bottom: 1px solid var(--m3x-border); font-size: 14px; font-weight: 500; color: var(--m3x-fg); }
-#m3x-concept .m3x-ne-playall > b { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--m3x-accent); color: var(--m3x-bg); }
+#m3x-concept .m3x-ne-hero h3 { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#m3x-concept .m3x-ne-hero p { margin: 6px 0 0; font-size: 11px; color: var(--m3x-muted); line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+#m3x-concept .m3x-ne-playall { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; font-size: 14px; font-weight: 700; color: var(--m3x-fg); }
+#m3x-concept .m3x-ne-playall > b { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--m3x-accent); color: var(--m3x-on-accent); box-shadow: 0 4px 12px color-mix(in srgb, var(--m3x-accent) 26%, transparent); }
 #m3x-concept .m3x-ne-playall svg { width: 14px; height: 14px; }
 #m3x-concept .m3x-ne-playall small { font-size: 11px; font-weight: 400; color: var(--m3x-muted); }
-#m3x-concept .m3x-ne-profile { display: flex; align-items: center; gap: 14px; padding: 12px 0 16px; }
-#m3x-concept .m3x-ne-profile img, #m3x-concept .m3x-ne-profile .m3x-ne-avatar { width: 64px; height: 64px; flex-shrink: 0; border-radius: 50%; object-fit: cover; background: var(--m3x-surface); display: grid; place-items: center; color: var(--m3x-muted); }
+
+/* Me */
+#m3x-concept .m3x-ne-profile { display: flex; align-items: center; gap: 16px; padding: 14px 0 18px; }
+#m3x-concept .m3x-ne-profile img, #m3x-concept .m3x-ne-profile .m3x-ne-avatar { width: 66px; height: 66px; flex-shrink: 0; border-radius: 50%; object-fit: cover; background: var(--m3x-surface); display: grid; place-items: center; box-shadow: var(--m3x-shadow-1); }
 #m3x-concept .m3x-ne-profile > div { flex: 1; min-width: 0; }
-#m3x-concept .m3x-ne-profile strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 500; }
-#m3x-concept .m3x-ne-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-#m3x-concept .m3x-ne-badge { padding: 1px 7px; border-radius: 9px; font-size: 10px; line-height: 16px; background: var(--m3x-surface); color: var(--m3x-muted); }
-#m3x-concept .m3x-ne-badge[data-vip="true"] { background: var(--m3x-accent); color: var(--m3x-bg); font-weight: 500; }
+#m3x-concept .m3x-ne-profile strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 19px; font-weight: 700; }
+#m3x-concept .m3x-ne-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+#m3x-concept .m3x-ne-badge { padding: 1px 8px; border-radius: var(--r-pill); font-size: 10px; line-height: 17px; background: var(--m3x-surface); color: var(--m3x-muted); }
+#m3x-concept .m3x-ne-badge[data-vip="true"] { background: var(--m3x-accent); color: var(--m3x-on-accent); font-weight: 700; }
 #m3x-concept .m3x-ne-profile p { margin: 6px 0 0; font-size: 11px; color: var(--m3x-muted); }
-#m3x-concept .m3x-ne-login { padding: 18px 0; border-bottom: 1px solid var(--m3x-border); }
+#m3x-concept .m3x-ne-login { padding: 18px 0; border-bottom: 1px solid var(--m3x-hairline); }
 #m3x-concept .m3x-ne-login .m3x-ne-actions { display: flex; gap: 10px; margin-top: 14px; }
-#m3x-concept .m3x-ne-login .m3x-ne-pill { flex: 1; min-height: 42px; border-radius: 21px; font-size: 13px; }
-#m3x-concept .m3x-ne-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-#m3x-concept .m3x-ne-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 76px; padding: 12px; border-radius: 10px; background: var(--m3x-surface); text-align: left; color: var(--m3x-fg); }
+#m3x-concept .m3x-ne-login .m3x-ne-pill { flex: 1; min-height: 44px; font-size: 13px; }
+#m3x-concept .m3x-ne-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+#m3x-concept .m3x-ne-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 80px; padding: 12px; border-radius: var(--r-md); background: var(--m3x-raised); box-shadow: var(--m3x-shadow-1); text-align: left; color: var(--m3x-fg); }
 #m3x-concept .m3x-ne-tile svg { width: 20px; height: 20px; color: var(--m3x-accent); }
-#m3x-concept .m3x-ne-tile strong { font-size: 13px; font-weight: 500; }
+#m3x-concept .m3x-ne-tile strong { font-size: 13px; font-weight: 700; }
 #m3x-concept .m3x-ne-tile small { font-size: 10px; color: var(--m3x-muted); }
-#m3x-concept .m3x-ne-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 52px; border-bottom: 1px solid var(--m3x-border); font-size: 14px; color: var(--m3x-fg); text-align: left; }
-#m3x-concept .m3x-ne-setting select { min-height: 34px; padding: 0 8px; font: inherit; font-size: 13px; color: var(--m3x-fg); background: var(--m3x-surface); border: 1px solid var(--m3x-border); border-radius: 6px; }
+#m3x-concept .m3x-ne-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 52px; padding: 4px 0; border-bottom: 1px solid var(--m3x-hairline); font-size: 14px; color: var(--m3x-fg); text-align: left; }
+#m3x-concept .m3x-ne-setting select { min-height: 34px; padding: 0 22px 0 10px; font: inherit; font-size: 13px; color: var(--m3x-fg); background-color: var(--m3x-surface); border: 0; border-radius: var(--r-sm); }
 #m3x-concept .m3x-ne-setting small { color: var(--m3x-muted); font-size: 12px; }
 #m3x-concept .m3x-ne-setting.m3x-ne-danger { color: var(--m3x-accent); }
-#m3x-concept .m3x-ne-qr { display: block; width: 200px; height: 200px; margin: 12px auto; image-rendering: pixelated; background: #fff; }
-#m3x-concept .m3x-ne-comment { display: flex; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--m3x-border); }
+#m3x-concept .m3x-ne-qr { display: block; width: 200px; height: 200px; margin: 12px auto; image-rendering: pixelated; background: #fff; border-radius: var(--r-sm); }
+#m3x-concept .m3x-ne-comment { display: flex; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--m3x-hairline); }
 #m3x-concept .m3x-ne-comment img { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; object-fit: cover; background: var(--m3x-surface); }
 #m3x-concept .m3x-ne-comment > div { flex: 1; min-width: 0; }
 #m3x-concept .m3x-ne-comment small { display: flex; justify-content: space-between; font-size: 11px; color: var(--m3x-muted); }
 #m3x-concept .m3x-ne-comment p { margin: 5px 0 0; font-size: 13px; line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
 #m3x-concept .m3x-ne-loading { padding: 28px 0; text-align: center; font-size: 12px; color: var(--m3x-muted); }
-#m3x-concept .m3x-ne-more { width: 100%; min-height: 44px; font-size: 12px; color: var(--m3x-accent); }
-#m3x-concept [data-visual-theme=endfield] .m3x-ne-chip, #m3x-concept [data-visual-theme=endfield] .m3x-ne-banner, #m3x-concept [data-visual-theme=endfield] .m3x-ne-pill,
-#m3x-concept [data-visual-theme=endfield] .m3x-ne-tile, #m3x-concept [data-visual-theme=endfield] .m3x-ne-radio-chip, #m3x-concept [data-visual-theme=endfield] .m3x-ne-badge { border-radius: 0; }
-#m3x-concept [data-visual-theme=endfield] .m3x-ne-entry > b, #m3x-concept [data-visual-theme=endfield] .m3x-ne-playall > b, #m3x-concept [data-visual-theme=endfield] .m3x-ne-badge[data-vip="true"] { background: var(--m3x-signal); color: #1d211b; }
-#m3x-concept [data-visual-theme=endfield] .m3x-ne-entry > b { border-radius: 0; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px); }
-#m3x-concept [data-visual-theme=endfield] .m3x-ne-banner, #m3x-concept [data-visual-theme=endfield] .m3x-ne-tile { border-top: 3px solid var(--m3x-fg); }
-#m3x-concept [data-visual-theme=endfield] .m3x-ne-section { border-top: 2px solid var(--m3x-fg); margin-top: 10px; }
-#m3x-concept .m3x-ne-entry > b.m3x-ne-day { font-size: 19px; font-weight: 700; }
-/* Source tabs: the home-page title doubles as the 曲库 | 网易云 switch. */
-#m3x-concept .m3x-source-tabs { display: flex; align-items: baseline; gap: 14px; flex-shrink: 0; white-space: nowrap; }
-#m3x-concept .m3x-source-tabs button { min-height: 44px; padding: 0; font: inherit; color: var(--m3x-fg); }
-#m3x-concept .m3x-source-tabs button[aria-pressed="false"] { font-size: 17px; font-weight: 400; color: var(--m3x-muted); }
-#m3x-concept [data-panel="library"] .m3x-page-heading, #m3x-concept [data-panel="netease"] .m3x-page-heading { display: flex; align-items: center; gap: 12px; }
-#m3x-concept .m3x-heading-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--m3x-muted); }
-#m3x-concept [data-panel="netease-me"] > .m3x-heading { margin-bottom: 0; }
+#m3x-concept .m3x-ne-more { width: 100%; min-height: 44px; font-size: 12px; font-weight: 700; color: var(--m3x-accent); border-radius: var(--r-pill); }
+
 /* Radio mode chip replaces the format line on the player while 私人FM / 心动模式 runs. */
 #m3x-concept .m3x-screen[data-radio="fm"] .m3x-player-tools .m3x-metadata, #m3x-concept .m3x-screen[data-radio="heartbeat"] .m3x-player-tools .m3x-metadata { display: none; }
-#m3x-concept .m3x-ne-radio-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; margin-right: auto; padding: 0 10px 0 12px; border-radius: 15px; font-size: 12px; font-weight: 500; color: var(--m3x-accent); box-shadow: inset 0 0 0 1px var(--m3x-accent); }
+#m3x-concept .m3x-ne-radio-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; margin-right: auto; padding: 0 10px 0 12px; border-radius: var(--r-pill); font-size: 12px; font-weight: 700; color: var(--m3x-accent); background: var(--m3x-accent-soft); }
 #m3x-concept .m3x-ne-radio-chip i { font-style: normal; font-size: 14px; line-height: 1; opacity: .7; }
+
+/* Endfield: square shapes come from the tokens; keep the signal colour and module rules. */
+#m3x-concept [data-visual-theme=endfield] .m3x-ne-entry > b, #m3x-concept [data-visual-theme=endfield] .m3x-ne-playall > b,
+#m3x-concept [data-visual-theme=endfield] .m3x-ne-badge[data-vip="true"], #m3x-concept [data-visual-theme=endfield] .m3x-ne-pill:not(.m3x-ne-ghost),
 #m3x-concept [data-visual-theme=endfield] .m3x-ne-radio-chip { background: var(--m3x-signal); color: #1d211b; box-shadow: none; }
-#m3x-concept [data-visual-theme=endfield] .m3x-ne-pill:not(.m3x-ne-ghost) { background: var(--m3x-signal); color: #1d211b; }
+#m3x-concept [data-visual-theme=endfield] .m3x-ne-entry > b { border-radius: 0; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px); }
+#m3x-concept [data-visual-theme=endfield] .m3x-ne-banner { background: var(--m3x-surface); border-top: 3px solid var(--m3x-fg); }
+#m3x-concept [data-visual-theme=endfield] .m3x-ne-tile { box-shadow: none; border-top: 3px solid var(--m3x-fg); }
+#m3x-concept [data-visual-theme=endfield] .m3x-ne-section { border-top: 2px solid var(--m3x-fg); margin-top: 10px; }
+#m3x-concept [data-visual-theme=endfield] .m3x-ne-card img, #m3x-concept [data-visual-theme=endfield] .m3x-ne-hero img { box-shadow: none; }
 #m3x-concept [data-visual-theme=endfield] [data-panel="netease"] .m3x-page-heading::after { left: 48px; }
+
+/* 1.0 · Lyric search: every candidate is checked for synced lyrics in the background. */
+#m3x-concept .m3x-lyric-results .m3x-lyric-probe { flex-shrink: 0; white-space: nowrap; padding: 1px 8px; border-radius: var(--r-pill); font-size: 11px; line-height: 17px; color: var(--m3x-accent); background: var(--m3x-accent-soft); }
+#m3x-concept .m3x-lyric-results [data-lyrics=none] { opacity: .5; }
+#m3x-concept .m3x-lyric-results [data-lyrics=none] .m3x-lyric-probe { color: var(--m3x-muted); background: var(--m3x-surface); }
+#m3x-concept .m3x-lyric-results [aria-current=true] { color: var(--m3x-accent); font-weight: 700; }

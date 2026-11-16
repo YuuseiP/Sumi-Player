@@ -1,8 +1,8 @@
-# 澄 · M3X Android
+# 澄 · Sumi-Player Android
 
 ## 安装
 
-安装文件：`dist/Cheng-M3X-0.6.0.apk`，可从仓库的 v0.6.0 Release 下载。
+安装文件：`dist/Sumi-Player-1.0.1.apk`，可从仓库的 v1.0.1 Release 下载。
 
 这是带本地发布签名的侧载 APK，不是 Google Play 发布包。面向原版 M3X 的 Android 7.1 / API 25，`minSdk=25`、`targetSdk=28`。不要求电脑预览服务、不捆绑测试歌曲、不登录账户。
 

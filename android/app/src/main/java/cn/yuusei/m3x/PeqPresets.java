@@ -22,7 +22,7 @@ final class PeqPresets {
         return bands;
     }
     static String export(JSONArray bands) {
-        StringBuilder text = new StringBuilder("# M3X Player parametric EQ\n");
+        StringBuilder text = new StringBuilder("# Sumi Player parametric EQ\n");
         for (int i = 0; i < bands.length(); i++) {
             JSONObject band = bands.optJSONObject(i); if (band == null) continue;
             text.append(String.format(java.util.Locale.ROOT, "Filter %d: %s %s Fc %.2f Hz Gain %.2f dB Q %.3f\n",

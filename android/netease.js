@@ -62,6 +62,9 @@
       });
       return node;
     }
+    // Design-system list entrance (staggered rise) once the list is on screen; skipped for background re-renders.
+    function enterList(node, context) { if (node) requestAnimationFrame(() => window.M3X_MOTION?.listEnter?.(node, context)); }
+    let enteredBatch = -1;
     function iconNode(name, extra) { const b = el("b"); b.innerHTML = icons[name]; if (extra) b.append(extra); return b; }
     function iconFrom(name) { const span = el("span"); span.innerHTML = icons[name]; return span.firstChild; }
     function img(src, alt = "") { const node = el("img"); node.alt = alt; node.loading = "lazy"; node.src = src || "cover-placeholder.svg"; return node; }
@@ -76,9 +79,9 @@
     function sheet(title) {
       const dialog = el("dialog", "m3x-sheet-overlay"); dialog.setAttribute("aria-label", title);
       const scrim = el("div", "m3x-sheet-scrim"), content = el("section", "m3x-sheet"), header = el("header", "m3x-sheet-header");
-      header.append(el("h2", "", title), btn("m3x-icon", "×", () => ui.closeDialog(dialog, true), "关闭"));
+      header.append(el("h2", "", title), btn("m3x-icon", "×", () => ui.closeDialog(dialog), "关闭"));
       content.append(header); dialog.append(scrim, content); screen.append(dialog);
-      scrim.addEventListener("click", () => ui.closeDialog(dialog, true));
+      scrim.addEventListener("click", () => ui.closeDialog(dialog));
       dialog.addEventListener("close", () => dialog.remove());
       ui.openDialog(dialog); return content;
     }
@@ -114,6 +117,8 @@
           : { netease: "library", "netease-list": "library", "netease-me": "profile" };
         ui.go(map[page] || page);
       }
+      // The other mode's top-level pages stop being kept warm; this mode's warm up once things settle.
+      window.M3X_MOTION?.recolor?.();
       if (mode === "netease") {
         ui.releaseLists();
         ensureHome(); if (home) renderDiscover(); if (profile) renderMe();
@@ -191,7 +196,7 @@
     }
     function renderDiscover() {
       const view = $("ne-discover"); if (!view) return;
-      const nodes = [];
+      const nodes = []; let grid = null;
       if (profile && !loggedIn()) {
         const banner = el("div", "m3x-ne-banner");
         banner.append(el("p", "", "登录网易云，解锁每日推荐、私人FM、心动模式和你的歌单"), btn("m3x-ne-pill", "去登录", () => ui.go("netease-me")));
@@ -207,13 +212,14 @@
       else {
         if (home.error && !home.playlists.length) nodes.push(el("p", "m3x-ne-loading", home.error));
         if (home.playlists.length) {
-          const section = el("section", "m3x-ne-section"), heading = el("div", "m3x-section-heading"), grid = el("div", "m3x-ne-grid");
+          const section = el("section", "m3x-ne-section"), heading = el("div", "m3x-section-heading"); grid = el("div", "m3x-ne-grid");
           heading.append(el("h3", "", loggedIn() && !playlistBatch ? "为你推荐的歌单" : "推荐歌单"), btn("m3x-text-button", "换一批", () => morePlaylists()));
           home.playlists.slice(0, 9).forEach(item => grid.append(card(item, () => openList("playlist", { id: item.id }))));
           section.append(heading, grid); nodes.push(section);
         }
       }
       view.replaceChildren(...nodes);
+      if (grid && enteredBatch !== playlistBatch) { enteredBatch = playlistBatch; enterList(grid, "discover"); }
     }
     // ---- pull to refresh: swap the recommended playlists for a batch not shown yet ----------------------
     function morePlaylists() {
@@ -315,9 +321,11 @@
         playlists.slice(0, 3).forEach(item => nodes.push(listRow(item, item.count + " 首" + (item.creator ? " · " + item.creator : ""), () => openList("playlist", { id: item.id }))));
       }
       nodes.push(el("p", "m3x-ne-label", songs.length ? "单曲 · 共 " + total + " 首" : "没有找到与“" + query + "”相关的歌曲"));
-      if (songs.length) nodes.push(playAll(songs), songList(songs));
+      const list = songs.length ? songList(songs) : null;
+      if (list) nodes.push(playAll(songs), list);
       if (songs.length < total && songs.length < 300) nodes.push(btn("m3x-ne-more", "加载更多", () => runSearch(query, true)));
       searchView.replaceChildren(...nodes);
+      if (list && songs.length <= 30) enterList(list, "search");
     }
     $("ne-search-form").addEventListener("submit", event => { event.preventDefault(); runSearch(searchInput.value); });
     searchInput.addEventListener("focus", openSearch);
@@ -411,10 +419,12 @@
       if (data.subtitle) text.append(el("p", "", data.subtitle));
       if (data.description) text.append(el("p", "", data.description));
       hero.append(img(data.cover), text); nodes.push(hero);
-      if (data.songs.length) nodes.push(playAll(data.songs), songList(data.songs, !["daily", "recent", "simi"].includes(data.kind)));
+      const list = data.songs.length ? songList(data.songs, !["daily", "recent", "simi"].includes(data.kind)) : null;
+      if (list) nodes.push(playAll(data.songs), list);
       else nodes.push(el("p", "m3x-ne-loading", "暂无歌曲"));
       if (data.truncated) nodes.push(el("p", "m3x-caption", "歌单较大，仅显示前 3000 首"));
       target.replaceChildren(...nodes);
+      if (list && !view.entered) { view.entered = true; enterList(list, "collection"); }
     }
     const titles = { playlist: "歌单", daily: "每日推荐", album: "专辑", artist: "歌手", simi: "相似歌曲", recent: "最近常听" };
     const listCache = new Map();

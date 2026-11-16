@@ -37,7 +37,7 @@ try {
     New-Item -ItemType Directory -Force $dist | Out-Null
     $version = [regex]::Match((Get-Content -Raw -Encoding UTF8 '.\app\build.gradle'), "versionName '([^']+)'").Groups[1].Value
     if (-not $version) { throw '无法读取 APK 版本号' }
-    $name = "Cheng-M3X-$version.apk"
+    $name = "Sumi-Player-$version.apk"
     $apk = Join-Path $dist $name
     Copy-Item -LiteralPath '.\app\build\outputs\apk\release\app-release.apk' -Destination $apk -Force
     $hash = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -1038,13 +1038,20 @@
         node.style.opacity = opacity;
       });
     }
-    function settle() { place(0, reduced() ? "none" : "transform 200ms cubic-bezier(.2,.8,.2,1), opacity 200ms ease"); }
+    // Curves come from the design system: a soft spring back, an emphasised entrance, an accelerating exit.
+    const spring = "var(--ease-spring-soft, cubic-bezier(.2,.8,.2,1))", emph = "var(--ease-emph, cubic-bezier(.05,.7,.1,1))";
+    let unclip = 0;
+    function settle() {
+      place(0, reduced() ? "none" : "transform 300ms " + spring + ", opacity 220ms ease");
+      clearTimeout(unclip); unclip = setTimeout(() => { delete strip.dataset.swiping; }, 320);
+    }
     function enter() {
       clearTimeout(fallback); window.removeEventListener("m3x-track", enter);
+      setTimeout(() => { delete strip.dataset.swiping; }, 420);
       if (reduced()) { place(0); return; }
       place(-outgoing * strip.offsetWidth * .4);
       strip.getBoundingClientRect(); // commit the start position before animating in
-      place(0, "transform 260ms cubic-bezier(.2,.8,.2,1), opacity 260ms ease");
+      place(0, "transform 360ms " + emph + ", opacity 280ms ease");
     }
     function cancelPending() {
       clearTimeout(fallback); clearTimeout(exitTimer); exitTimer = 0;
@@ -1064,7 +1071,7 @@
       if (!dragging) {
         if (Math.abs(x) < 8 && Math.abs(y) < 8) return;
         if (Math.abs(y) > Math.abs(x)) { tracking = false; return; }
-        dragging = true; suppressClick = true;
+        dragging = true; suppressClick = true; clearTimeout(unclip); strip.dataset.swiping = "true";
       }
       event.preventDefault();
       dx = x; place(dx);
@@ -1077,6 +1084,7 @@
       const commit = Math.abs(dx) >= Math.max(56, width * .25) || (velocity > .45 && Math.abs(dx) >= 28);
       if (!commit) { settle(); return; }
       outgoing = dx < 0 ? -1 : 1;
+      strip.dataset.swiping = "true";
       const finish = () => {
         exitTimer = 0;
         window.addEventListener("m3x-track", enter);
@@ -1084,7 +1092,7 @@
         stepTrack(outgoing > 0);
       };
       if (reduced()) { place(0); finish(); return; }
-      place(outgoing * width, "transform 170ms cubic-bezier(.4,0,1,1), opacity 170ms ease");
+      place(outgoing * width, "transform 170ms var(--ease-in, cubic-bezier(.3,0,.8,.15)), opacity 170ms ease");
       exitTimer = setTimeout(finish, 170);
     }
     strip.addEventListener("touchend", release);
