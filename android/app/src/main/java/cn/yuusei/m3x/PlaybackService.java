@@ -45,6 +45,8 @@ public final class PlaybackService extends MediaSessionService {
     private DefaultMediaSourceFactory sourceFactory;
     private List<JSONObject> queueLibrary;
     private String queueSelection = "";
+    private String preferenceCarryId = "", preferenceOnceId = "";
+    private boolean preferenceCleanupPosted;
     private boolean restoring = true;
     private String route = "未检测到外接音频设备";
     private final android.media.AudioDeviceCallback routeChanges = new android.media.AudioDeviceCallback() {
@@ -54,6 +56,10 @@ public final class PlaybackService extends MediaSessionService {
     private float manualGain = 1, rampFrom = 1, rampTarget = 1;
     private long rampStart;
     private boolean pauseAfterRamp, fadeTrackStart;
+    private LoudnessCache loudness;
+    private float loudnessLevel = 1, loudnessFrom = 1, loudnessTo = 1;
+    private long loudnessRampStart, loudnessRampMs;
+    private JSONObject loudnessState = new JSONObject();
     private String previousAlbum = "";
     private final Runnable fadeTick = new Runnable() {
         @Override public void run() {
@@ -74,9 +80,14 @@ public final class PlaybackService extends MediaSessionService {
                 if (current != null && following != null && !sameAlbum(current.optString("album"), following.optString("album")) && player.getDuration() > 700)
                     transitionGain = Math.min(transitionGain, Math.max(0, (player.getDuration() - player.getCurrentPosition()) / 350f));
             }
-            float level = manualGain * transitionGain;
+            if (loudnessRampStart > 0) {
+                float fraction = Math.min(1, (SystemClock.elapsedRealtime() - loudnessRampStart) / (float) loudnessRampMs);
+                loudnessLevel = loudnessFrom + (loudnessTo - loudnessFrom) * fraction;
+                if (fraction == 1) loudnessRampStart = 0;
+            }
+            float level = manualGain * transitionGain * loudnessLevel;
             if (Math.abs(player.getVolume() - level) > .001) player.setVolume(level);
-            app.main.postDelayed(this, rampStart > 0 || (settings.optBoolean("albumTransitions") && player.isPlaying()) ? 33 : 1000);
+            app.main.postDelayed(this, rampStart > 0 || loudnessRampStart > 0 || (settings.optBoolean("albumTransitions") && player.isPlaying()) ? 33 : 1000);
         }
     };
     private static boolean sameAlbum(String a, String b) { return !a.isEmpty() && !a.startsWith("未知") && a.equals(b); }
@@ -110,6 +121,11 @@ public final class PlaybackService extends MediaSessionService {
         ListeningStats.initialize(stats, System.currentTimeMillis(), java.util.TimeZone.getDefault());
         ((AudioManager) getSystemService(AUDIO_SERVICE)).registerAudioDeviceCallback(routeChanges, app.main);
         updateRoute();
+        loudness = new LoudnessCache(app, id -> {
+            JSONObject track = currentTrack();
+            if (!destroyed && (id.isEmpty() || (track != null && track.optString("id").equals(id)))) refreshLoudness(false);
+            else if (!destroyed) requestLoudness();
+        });
         buildPlayer();
         android.util.Log.i("M3X.Perf", "player built in " + (SystemClock.elapsedRealtime() - started) + " ms");
         session = new MediaSession.Builder(this, sessionPlayer())
@@ -145,7 +161,9 @@ public final class PlaybackService extends MediaSessionService {
             }
         }.setEnableDecoderFallback(true).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
         ResolvingDataSource.Factory sources = new ResolvingDataSource.Factory(new DefaultDataSource.Factory(this, new OkHttpDataSource.Factory(NativeNetwork.HTTP)),
-            spec -> spec.withAdditionalHeaders(NativeNetwork.headers(spec.uri.toString())));
+            spec -> NeteaseClient.SCHEME.equals(spec.uri.getScheme())
+                ? spec.withUri(Uri.parse(NeteaseClient.get().resolve(spec.uri.getLastPathSegment())))
+                : spec.withAdditionalHeaders(NativeNetwork.headers(spec.uri.toString())));
         sourceFactory = new DefaultMediaSourceFactory(sources, AiffExtractor.factory());
         player = new ExoPlayer.Builder(this, renderers).setMediaSourceFactory(sourceFactory).build();
         player.setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true);
@@ -164,10 +182,14 @@ public final class PlaybackService extends MediaSessionService {
                 else if (!ready && !preparingFile && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) cancelWholeSongTimer();
             }
             @Override public void onMediaItemTransition(MediaItem item, int reason) {
+                if (!preferenceCarryId.isEmpty() && (item == null || !item.mediaId.equals(preferenceCarryId))) {
+                    preferenceCarryId = "";
+                    schedulePreferenceCleanup();
+                }
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) cancelWholeSongTimer();
                 listenedMs = 0; counted = false;
                 if (sleepExpired) { finishSleep(); return; }
-                error = ""; applyDsp(); savePosition();
+                error = ""; applyDsp(); refreshLoudness(true); savePosition();
                 JSONObject track = currentTrack();
                 String album = track == null ? "" : track.optString("album");
                 fadeTrackStart = !sameAlbum(previousAlbum, album); previousAlbum = album;
@@ -181,11 +203,19 @@ public final class PlaybackService extends MediaSessionService {
                 prepareDsd();
             }
             @Override public void onPlaybackStateChanged(int state) {
+                if (state == Player.STATE_ENDED && !preferenceCarryId.isEmpty()) {
+                    preferenceCarryId = "";
+                    player.setPlayWhenReady(false);
+                    schedulePreferenceCleanup();
+                }
                 if (state == Player.STATE_ENDED && sleepDeadline > 0 && SystemClock.elapsedRealtime() >= sleepDeadline) finishSleep();
             }
             @Override public void onPlayerError(PlaybackException exception) {
                 if (preparingFile) return;
-                error = "无法播放：" + exception.getErrorCodeName(); player.pause(); savePosition();
+                error = "无法播放：" + exception.getErrorCodeName();
+                for (Throwable cause = exception; cause != null; cause = cause.getCause())
+                    if (cause instanceof NeteaseClient.Denied) { error = "无法播放：" + cause.getMessage(); break; }
+                player.pause(); savePosition();
             }
             @Override public void onPositionDiscontinuity(Player.PositionInfo oldPosition, Player.PositionInfo newPosition, int reason) {
                 lastStats = SystemClock.elapsedRealtime();
@@ -249,18 +279,34 @@ public final class PlaybackService extends MediaSessionService {
         if (tagEditing) return;
         if (player == null) return;
         JSONArray queue = ui.optJSONArray("queue"), hidden = ui.optJSONArray("hidden");
-        String selection = String.valueOf(queue) + ":" + String.valueOf(hidden) + ":" + ui.optBoolean("queueCleared");
+        PreferenceRules.Settings preferences = PreferenceRules.settings(ui);
+        JSONObject active = currentTrack();
+        if (active != null && player.getPlayWhenReady() && preferences.excludes(active)
+                && !ui.optBoolean("queueCleared")) preferenceCarryId = active.optString("id");
+        if (active == null || !active.optString("id").equals(preferenceCarryId) || !preferences.excludes(active)
+                || ui.optBoolean("queueCleared")) preferenceCarryId = "";
+        // "library" scope in random mode follows the whole local catalog (never online NetEase entries).
+        // Songs started from an album, artist, folder or playlist use the "selection" scope and shuffle inside it.
+        boolean fullLibraryShuffle = ui.optInt("mode") == 1 && !ui.optBoolean("queueCleared")
+            && !ui.optString("queueScope").equals("selection");
+        String selection = String.valueOf(queue) + ":" + String.valueOf(hidden) + ":" + ui.optBoolean("queueCleared") + ":" + fullLibraryShuffle
+            + ":" + preferences.jsonValue() + ":" + preferenceCarryId;
         if (queueLibrary == app.library.all() && queueSelection.equals(selection)) {
             setQueueMode(ui); return;
         }
         Set<String> invisible = new HashSet<>(); if (hidden != null) for (int i = 0; i < hidden.length(); i++) invisible.add(hidden.optString(i));
         List<JSONObject> desired = new ArrayList<>();
         boolean matched = false;
-        if (queue != null) for (int i = 0; i < queue.length(); i++) {
+        if (!fullLibraryShuffle && queue != null) for (int i = 0; i < queue.length(); i++) {
             JSONObject track = app.library.track(queue.optString(i));
             if (track != null) { matched = true; if (!invisible.contains(track.optString("id"))) desired.add(track); }
         }
-        if (!matched && !ui.optBoolean("queueCleared")) for (JSONObject track : app.library.all()) if (!invisible.contains(track.optString("id"))) desired.add(track);
+        if (!matched && !ui.optBoolean("queueCleared")) for (JSONObject track : app.library.all())
+            if (!track.has("neteaseId") && !invisible.contains(track.optString("id"))) desired.add(track);
+        List<JSONObject> eligible = new ArrayList<>();
+        for (JSONObject track : desired) if (!preferences.excludes(track) || track.optString("id").equals(preferenceCarryId)) eligible.add(track);
+        if (!preferenceCarryId.isEmpty() && !invisible.contains(preferenceCarryId) && !eligible.contains(active)) eligible.add(active);
+        desired = eligible;
         boolean same = desired.size() == player.getMediaItemCount();
         for (int i = 0; same && i < desired.size(); i++) same = desired.get(i).optString("id").equals(player.getMediaItemAt(i).mediaId);
         if (!same) {
@@ -286,7 +332,22 @@ public final class PlaybackService extends MediaSessionService {
     private void setQueueMode(JSONObject ui) {
         int mode = ui.optInt("mode");
         player.setShuffleModeEnabled(mode == 1);
-        player.setRepeatMode(mode == 2 ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_ALL);
+        player.setRepeatMode(!preferenceCarryId.isEmpty() ? (player.getMediaItemCount() <= 1 ? Player.REPEAT_MODE_OFF : Player.REPEAT_MODE_ALL)
+            : mode == 2 ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_ALL);
+    }
+
+    private void schedulePreferenceCleanup() {
+        if (preferenceCleanupPosted) return;
+        preferenceCleanupPosted = true;
+        app.main.post(() -> {
+            preferenceCleanupPosted = false;
+            if (!destroyed) { queueLibrary = null; syncQueue(app.settings("ui")); }
+        });
+    }
+
+    public void allowTrackOnce(String id) {
+        if (app.library.track(id) == null) throw new IllegalArgumentException("歌曲不存在");
+        preferenceOnceId = id;
     }
 
     volatile boolean tagEditing;
@@ -315,6 +376,13 @@ public final class PlaybackService extends MediaSessionService {
     public void load(String id, boolean play) {
         if (tagEditing) return;
         if (restoring) throw new IllegalStateException("曲库正在加载，请稍候");
+        JSONObject requested = app.library.track(id);
+        if (requested == null) return;
+        if (PreferenceRules.settings(app.settings("ui")).excludes(requested)) {
+            if (!id.equals(preferenceCarryId) && !id.equals(preferenceOnceId)) throw new IllegalStateException("这首歌曲已被听歌喜好排除，请选择仅播放一次或始终保留");
+            preferenceCarryId = id;
+        }
+        preferenceOnceId = "";
         cancelWholeSongTimer();
         conversionPlay = play;
         int index = indexOf(id);
@@ -324,6 +392,7 @@ public final class PlaybackService extends MediaSessionService {
             player.addMediaItem(media(track)); queueLibrary = null; index = player.getMediaItemCount() - 1;
         }
         player.seekTo(index, 0); error = "";
+        setQueueMode(app.settings("ui"));
         if (!prepareDsd()) { player.prepare(); player.setPlayWhenReady(play); }
     }
 
@@ -351,6 +420,7 @@ public final class PlaybackService extends MediaSessionService {
                     if (currentTrack() != null && currentTrack().optString("id").equals(id)) {
                         int index = player.getCurrentMediaItemIndex(); player.replaceMediaItem(index, media(track)); player.prepare(); player.setPlayWhenReady(conversionPlay);
                     }
+                    refreshLoudness(false);
                 });
             } catch (Exception exception) { app.main.post(() -> { if (token == fileRequest) { preparingFile = false; conversion = ""; error = exception.getMessage(); } }); }
         });
@@ -359,6 +429,10 @@ public final class PlaybackService extends MediaSessionService {
 
     public void play() {
         if (tagEditing) return;
+        JSONObject current = currentTrack();
+        if (current == null) return;
+        if (PreferenceRules.settings(app.settings("ui")).excludes(current) && !current.optString("id").equals(preferenceCarryId))
+            throw new IllegalStateException("这首歌曲已被听歌喜好排除");
         conversionPlay = true;
         if (!player.getPlayWhenReady() && settings.optBoolean("fades")) { manualGain = 0; ramp(1, false); }
         else if (pauseAfterRamp) ramp(1, false);
@@ -400,6 +474,7 @@ public final class PlaybackService extends MediaSessionService {
         double speed = next.optDouble("rate", 1);
         if (speed < .25 || speed > 4 || !Double.isFinite(speed)) throw new IllegalArgumentException("速度范围为 0.25～4 倍");
         if (!Arrays.asList(0, 44100, 48000, 88200, 96000, 176400, 192000).contains(next.optInt("sampleRate"))) throw new IllegalArgumentException("不支持的提交采样率");
+        if (next.has("normalizeTarget") && !Arrays.asList(-14, -16, -18).contains(next.optInt("normalizeTarget", 0))) throw new IllegalArgumentException("目标响度仅支持 -14 / -16 / -18 LUFS");
         settings = next;
         DspEngine.Config config;
         try { config = dspConfig(); } catch (Exception exception) { settings = old; throw exception; }
@@ -417,7 +492,7 @@ public final class PlaybackService extends MediaSessionService {
             if (!prepareDsd()) { if (!items.isEmpty()) player.prepare(); player.setPlayWhenReady(playing); }
         }
         if (processor != null) processor.engine.set(config);
-        applyRate(); app.save("audio", settings);
+        applyRate(); refreshLoudness(rebuild); app.save("audio", settings);
     }
 
     private void applyRate() {
@@ -459,6 +534,78 @@ public final class PlaybackService extends MediaSessionService {
         }
         return new DspEngine.Config(bands.toArray(new DspEngine.Band[0]), gain, settings.optBoolean("reverb"), settings.optBoolean("compressor"), settings.optBoolean("hall"));
     }
+    /**
+     * Loudness normalisation attenuates through the player volume, which the AudioTrack applies at output time,
+     * so the new song's level lines up with onMediaItemTransition instead of with the decoder's read-ahead.
+     */
+    private void refreshLoudness(boolean immediate) {
+        if (player == null) return;
+        float target = loudnessGain(currentTrack());
+        if (immediate) { loudnessLevel = loudnessFrom = loudnessTo = target; loudnessRampStart = 0; }
+        else if (Math.abs(target - loudnessTo) > .001) {
+            loudnessFrom = loudnessLevel; loudnessTo = target; loudnessRampStart = SystemClock.elapsedRealtime();
+            loudnessRampMs = player.isPlaying() ? 1500 : 1;
+        }
+        requestLoudness();
+        app.main.removeCallbacks(fadeTick); fadeTick.run();
+    }
+
+    /** Analyses the current song first, then the next two in play order, so normal listening never waits. */
+    private void requestLoudness() {
+        if (player == null || !settings.optBoolean("normalize", true)) { loudness.want(Collections.emptySet()); return; }
+        List<JSONObject> tracks = new ArrayList<>();
+        JSONObject current = currentTrack(); if (current != null) tracks.add(current);
+        Timeline timeline = player.getCurrentTimeline();
+        int index = player.getCurrentMediaItemIndex();
+        for (int step = 0; step < 2 && !timeline.isEmpty() && index != C.INDEX_UNSET; step++) {
+            index = timeline.getNextWindowIndex(index, player.getRepeatMode() == Player.REPEAT_MODE_ONE ? Player.REPEAT_MODE_ALL : player.getRepeatMode(), player.getShuffleModeEnabled());
+            if (index == C.INDEX_UNSET || index >= player.getMediaItemCount()) break;
+            JSONObject track = app.library.track(player.getMediaItemAt(index).mediaId); if (track != null) tracks.add(track);
+        }
+        List<String> ids = new ArrayList<>(); for (JSONObject track : tracks) ids.add(track.optString("id"));
+        loudness.want(ids);
+        for (JSONObject track : tracks) {
+            if (!Double.isNaN(LoudnessMeter.tagGain(track.optJSONObject("replayGain"), settings.optString("replaygain", "off")))) continue;
+            Uri uri = loudnessSource(track);
+            if (uri != null) loudness.request(track.optString("id"), uri, track.optLong("cueStart"), track.has("cueEnd") ? track.optLong("cueEnd") : 0, (long) (track.optDouble("duration", 0) * 1000));
+        }
+    }
+
+    /** DSD is measured from its decoded PCM cache once that exists; online songs fetch only sampled byte ranges. */
+    private Uri loudnessSource(JSONObject track) {
+        Uri uri = Uri.parse(track.optString("uri"));
+        if (!Arrays.asList("file", "content", "http", "https", NeteaseClient.SCHEME).contains(uri.getScheme())) return null;
+        if (track.optString("codec").equals("DSD")) {
+            File cached = new File(getCacheDir(), "decoded/" + track.optString("id") + "-dsd.wav");
+            return cached.isFile() ? Uri.fromFile(cached) : null;
+        }
+        return uri;
+    }
+
+    private float loudnessGain(JSONObject track) {
+        double target = settings.optDouble("normalizeTarget", LoudnessMeter.DEFAULT_TARGET), lufs = Double.NaN;
+        String source;
+        if (track == null) source = "idle";
+        else if (!settings.optBoolean("normalize", true)) source = "off";
+        else {
+            String mode = settings.optString("replaygain", "off");
+            double tag = LoudnessMeter.tagGain(track.optJSONObject("replayGain"), mode);
+            double[] measured = loudness.get(track.optString("id"));
+            if (!Double.isNaN(tag) && !mode.equals("off") && processor != null) source = "replaygain";
+            else if (!Double.isNaN(tag)) { source = "tag"; lufs = LoudnessMeter.REPLAYGAIN_REFERENCE - tag; }
+            else if (measured != null) { source = "measured"; lufs = measured[0]; }
+            else {
+                lufs = loudness.provisional();
+                String id = track.optString("id");
+                source = loudness.pending(id) ? "analyzing" : loudnessSource(track) == null || loudness.failed(id) ? "unavailable" : "analyzing";
+            }
+        }
+        float gain = (float) LoudnessMeter.attenuation(lufs, target);
+        loudnessState = json("source", source, "lufs", Double.isNaN(lufs) ? JSONObject.NULL : Math.round(lufs * 10) / 10d,
+            "estimated", source.equals("analyzing") || source.equals("unavailable"), "gainDb", Math.round(20 * Math.log10(gain) * 10) / 10d, "target", target);
+        return gain;
+    }
+
     private void applyDsp() { try { if (processor != null) processor.engine.set(dspConfig()); } catch (Exception exception) { error = exception.getMessage(); } }
     private void statsTime(long elapsed) { ListeningStats.record(stats, System.currentTimeMillis(), elapsed, java.util.TimeZone.getDefault()); }
     private void savePosition() {
@@ -479,20 +626,24 @@ public final class PlaybackService extends MediaSessionService {
         }
         route = devices.isEmpty() ? "未检测到外接音频设备" : "系统已连接：" + android.text.TextUtils.join(" / ", devices);
     }
-    public JSONObject snapshot() {
+    public JSONObject snapshot() { return snapshot(false); }
+    /** Listening stats grow with the library; the UI asks for them only every few seconds. */
+    public JSONObject snapshot(boolean withStats) {
         JSONObject track = currentTrack();
-        return json("id", track == null ? "" : track.optString("id"), "position", player.getCurrentPosition() / 1000d,
+        JSONObject state = json("id", track == null ? "" : track.optString("id"), "preferenceContinuation", track != null && track.optString("id").equals(preferenceCarryId), "position", player.getCurrentPosition() / 1000d,
             "duration", player.getDuration() > 0 ? player.getDuration() / 1000d : track == null ? 0 : track.optDouble("duration"),
             "paused", !player.getPlayWhenReady(), "playing", player.isPlaying(), "ready", player.getPlaybackState() == Player.STATE_READY, "loading", restoring,
-            "error", error, "conversion", conversion, "settings", settings, "stats", stats, "outputRate", outputRate,
+            "error", error, "conversion", conversion, "settings", settings, "outputRate", outputRate,
             "outputEncoding", outputEncoding, "decoder", decoderName, "route", route, "sleepRemaining", sleepDeadline == 0 ? 0 : Math.max(0, sleepDeadline - SystemClock.elapsedRealtime()),
-            "sleepFinish", sleepFinish, "sleepWaiting", sleepExpired);
+            "sleepFinish", sleepFinish, "sleepWaiting", sleepExpired, "loudness", loudnessState);
+        if (withStats) try { state.put("stats", stats); } catch (org.json.JSONException ignored) { /* stats stay optional */ }
+        return state;
     }
     @Override public MediaSession onGetSession(MediaSession.ControllerInfo controller) { return session; }
     @Override public void onDestroy() {
         destroyed = true;
         ((AudioManager) getSystemService(AUDIO_SERVICE)).unregisterAudioDeviceCallback(routeChanges);
-        app.main.removeCallbacks(tick); app.main.removeCallbacks(fadeTick); fileRequest++; savePosition(); app.save("tools", stats);
+        app.main.removeCallbacks(tick); app.main.removeCallbacks(fadeTick); fileRequest++; savePosition(); app.save("tools", stats); loudness.shutdown();
         if (session != null) session.release(); if (player != null) player.release(); app.playback = null; super.onDestroy();
     }
 }

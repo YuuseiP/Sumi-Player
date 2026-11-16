@@ -21,6 +21,7 @@ final class NativeDocuments {
                 if (backup.optInt("schema") != 1 || !backup.optString("application").equals("cn.yuusei.m3x")) throw new IOException("不是澄播放器备份");
                 for (String key : new String[]{"ui", "audio", "tools"}) if (!(backup.opt(key) instanceof JSONObject)) throw new IOException("备份内容不完整");
                 JSONObject audio = backup.getJSONObject("audio");
+                PreferenceRules.validateUi(backup.getJSONObject("ui"));
                 // Validate all processing settings before committing any user data.
                 JSONArray peq = audio.optJSONArray("peq");
                 if (peq != null && peq.length() > 0) PeqPresets.parse(PeqPresets.export(peq));

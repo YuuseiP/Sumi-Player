@@ -50,7 +50,7 @@ final class LyricsProviders {
         query = query.trim(); if (query.isEmpty() || query.length() > 250) throw new IOException("请输入 1～250 字的搜索词");
         boolean qq = provider.equals("QQ");
         JSONObject data = request(provider, qq ? url("https://c.y.qq.com/soso/fcgi-bin/client_search_cp", "w", query, "format", "json", "p", "1", "n", "20")
-            : url(NE + "/api/search/get/web", "s", query, "type", "1", "limit", "20"), null);
+            : url(NE + "/api/cloudsearch/pc", "s", query, "type", "1", "limit", "20", "offset", "0"), null);
         return searchResults(provider, data);
     }
     static JSONArray searchResults(String provider, JSONObject data) throws Exception {
@@ -63,13 +63,14 @@ final class LyricsProviders {
         if (rows == null) return result;
         for (int i = 0; i < Math.min(20, rows.length()); i++) {
             JSONObject row = rows.getJSONObject(i), item = new JSONObject();
-            JSONArray artists = row.optJSONArray(qq ? "singer" : "artists");
+            // NetEase cloudsearch rows use ar/al/dt; the legacy web search used artists/album/duration.
+            JSONArray artists = row.optJSONArray(qq ? "singer" : row.has("ar") ? "ar" : "artists");
             List<String> names = new ArrayList<>();
             if (artists != null) for (int n = 0; n < artists.length(); n++) names.add(artists.getJSONObject(n).optString("name"));
             item.put("provider", provider).put("songId", row.get(qq ? "songid" : "id").toString())
                 .put("mid", row.optString("songmid")).put("title", row.optString(qq ? "songname" : "name"))
-                .put("artist", String.join(" / ", names)).put("album", qq ? row.optString("albumname") : row.getJSONObject("album").optString("name"))
-                .put("durationMs", qq ? row.optLong("interval") * 1000 : row.optLong("duration"));
+                .put("artist", String.join(" / ", names)).put("album", qq ? row.optString("albumname") : row.optJSONObject(row.has("al") ? "al" : "album") == null ? "" : row.getJSONObject(row.has("al") ? "al" : "album").optString("name"))
+                .put("durationMs", qq ? row.optLong("interval") * 1000 : row.has("dt") ? row.optLong("dt") : row.optLong("duration"));
             result.put(item);
         }
         return result;

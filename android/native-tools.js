@@ -2,7 +2,7 @@
   "use strict";
   function initialize() {
     const ui = window.M3X_UI, root = document.getElementById("m3x-concept"), audio = document.getElementById("audio");
-    let state = nativeCommand("poll"), config = state.settings || {}, lines = [], active = -1, detailRequest = 0, page = "library", lastNotice = "", selectedLyrics = false;
+    let state = nativeCommand("poll", { stats: true }), config = state.settings || {}, lines = [], active = -1, detailRequest = 0, page = "library", lastNotice = "", selectedLyrics = false;
     const $ = id => document.getElementById(id);
     const classification = document.createElement("p");
     classification.id = "builtin-classification"; classification.className = "m3x-caption";
@@ -48,6 +48,25 @@
     $("eq-preset").value = config.preset || "flat";
     $("eq-preset").addEventListener("change", event => { if (presets[event.target.value]) { configure({ bands: presets[event.target.value], preset: event.target.value, peq: null }); bands(); } });
     $("eq-reset").addEventListener("click", () => { configure({ bands: presets.flat, peq: null, preset: "flat" }); bands(); });
+    $("normalize-enabled").checked = config.normalize !== false;
+    $("normalize-options").hidden = config.normalize === false;
+    $("normalize-enabled").addEventListener("change", event => {
+      configure({ normalize: event.target.checked }); $("normalize-options").hidden = !event.target.checked;
+    });
+    $("normalize-target").value = String(config.normalizeTarget || -16);
+    $("normalize-target").addEventListener("change", event => configure({ normalizeTarget: Number(event.target.value) }));
+    function loudnessSummary(loudness) {
+      if (!loudness || loudness.source === "idle") return "切换歌曲时按测得响度自动降低音量，避免忽大忽小；不会提升或压缩原始动态。";
+      if (loudness.source === "off") return "已关闭，按歌曲原始音量播放。";
+      if (loudness.source === "replaygain") return "当前歌曲由 ReplayGain 标签增益处理。";
+      const level = loudness.lufs == null ? "" : loudness.lufs.toFixed(1) + " LUFS · ";
+      const change = loudness.gainDb < -.05 ? "降低 " + Math.abs(loudness.gainDb).toFixed(1) + " dB" : "保持原音量";
+      if (loudness.source === "tag") return "ReplayGain 标签 · " + level + change;
+      if (loudness.source === "measured") return "已分析 · " + level + change;
+      if (loudness.source === "analyzing") return loudness.lufs == null ? "正在分析当前歌曲响度…" : "正在分析当前歌曲响度，暂按曲库中位数 · " + change;
+      return loudness.lufs == null ? "此来源无法分析，按原音量播放。" : "此来源无法分析，按曲库中位数 · " + change;
+    }
+    $("normalize-status").textContent = loudnessSummary(state.loudness);
     $("replaygain-mode").value = config.replaygain || "off";
     $("replaygain-mode").addEventListener("change", event => configure({ replaygain: event.target.value }));
     $("playback-rate").replaceChildren();
@@ -269,7 +288,7 @@
           const entry = button(line.time.toFixed(2) + "  " + line.text, () => { if (ui.currentTrack()?.id === track.id) audio.currentTime = line.time; else ui.toast("请先播放此歌曲再跳转试听"); });
           preview.append(entry);
         });
-        provenance.textContent = (doc.provider === "NE" ? "网易云音乐" : "QQ 音乐") + " · ID " + doc.songId + (translated.some(line => line.text) ? " · 原文＋同步译文" : " · 无同步译文，不能双语固化") + (selected ? " · 已采用" : " · 预览／标注尚未保存");
+        provenance.textContent = (doc.provider === "NE" ? "网易云音乐" : "QQ 音乐") + " · ID " + doc.songId + (doc.auto && selected ? " · 自动匹配（时长差 " + Math.abs(doc.durationDeltaMs || 0) + " ms）" : "") + (translated.some(line => line.text) ? " · 原文＋同步译文" : " · 无同步译文，不能双语固化") + (selected ? " · 已采用" : " · 预览／标注尚未保存");
       }
       function show(value, draftToken, isSelected) {
         doc = value; token = draftToken || ""; revision = value.revision || ""; selected = isSelected; editor.hidden = false;
@@ -349,13 +368,21 @@
     $("lyrics-more").addEventListener("click", () => {
       const content = sheet("歌词更多操作"), menu = content.closest("dialog");
       const action = (label, fn) => content.append(button(label, () => { ui.closeDialog(menu, true); fn(); }));
+      action("伪息屏 · 封面与歌词", () => window.M3X_AMBIENT?.enter());
       action("搜索／更换歌词", () => onlineLyrics(ui.currentTrack())); action("调整歌词时间", offsetSheet);
       action("导入歌词", () => importLyrics(ui.currentTrack())); action("歌词保存与写入说明", explainLyrics);
     });
     window.addEventListener("m3x-lyrics-changed", () => lyrics());
 
     function lyrics() {
+      window.M3X_MOTION.cancelScroll();
       const request = ++detailRequest, track = ui.currentTrack();
+      lines = []; active = -1;
+      const container = $("lyrics-lines");
+      container.dataset.trackId = track ? track.id : "";
+      container.replaceChildren();
+      const pending = document.createElement("p"); pending.className = "m3x-plain-lyrics";
+      pending.textContent = track ? "正在读取歌词…" : "暂无播放歌曲"; container.append(pending);
       if (!track) return;
       fetch("/api/track?id=" + encodeURIComponent(track.id)).then(response => response.json()).then(details => {
         if (request !== detailRequest) return;
@@ -366,13 +393,43 @@
         else { $("lyric-offset").value = config.lyricOffset || 0; $("lyric-offset-label").value = $("lyric-offset").value + " 秒"; }
         const parsed = M3X_TOOLS.parseLrc(details.lyrics || ""); lines = parsed.lines; active = -1; $("lyrics-lines").replaceChildren();
         if (!lines.length) { const p = document.createElement("p"); p.className = "m3x-plain-lyrics"; p.textContent = parsed.plain || "暂无本地歌词"; $("lyrics-lines").append(p); }
+        if (!lines.length && !details.lyricSelection && config.autoLyrics !== false) autoLyrics(track, !parsed.plain);
         lines.forEach((line, index) => {
           const button = document.createElement("button"); button.className = "m3x-lyric-line"; button.textContent = line.text || "♪";
           button.addEventListener("click", () => { audio.currentTime = line.time + Number($("lyric-offset").value); }); $("lyrics-lines").append(button);
         });
         $("replaygain-status").textContent = M3X_TOOLS.replayGain(details.replayGain || {}, config.replaygain || "off").label;
-      }).catch(() => {});
+      }).catch(() => { if (request === detailRequest) pending.textContent = "歌词读取失败"; });
     }
+    // Automatic lyrics: only for songs without synced lyrics; the native side never replaces a manual choice.
+    let autoTimer = 0, autoRequest = "", autoStatus = false;
+    function autoStatusText(text) {
+      if (!autoStatus) return;
+      const p = $("lyrics-lines").querySelector(".m3x-plain-lyrics");
+      if (p && !lines.length) p.textContent = text;
+    }
+    function autoLyrics(track, showStatus) {
+      clearTimeout(autoTimer); autoRequest = ""; autoStatus = showStatus;
+      autoTimer = setTimeout(() => {
+        if (ui.currentTrack()?.id !== track.id) return;
+        if (navigator.onLine === false) { autoStatusText("暂无本地歌词 · 联网后自动匹配"); return; }
+        autoRequest = "auto-" + Date.now() + "-" + (++lyricRequestId);
+        autoStatusText("正在联网匹配歌词（QQ 音乐／网易云音乐）…");
+        nativeCommand("lyrics", { id: track.id, requestId: autoRequest, operation: "auto" });
+      }, 1200);
+    }
+    window.addEventListener("m3x-lyrics-result", event => {
+      const data = event.detail;
+      if (!autoRequest || data.requestId !== autoRequest) return;
+      autoRequest = "";
+      if (ui.currentTrack()?.id !== data.id) return;
+      if (data.state === "applied") { ui.toast(data.message); lyrics(); return; }
+      autoStatusText({ offline: "暂无本地歌词 · 联网后自动匹配", none: "暂无歌词 · 两个来源均没有时长差 1 秒内的版本",
+        selected: "暂无本地歌词", error: "暂无本地歌词 · 联网匹配失败，稍后重试" }[data.state] || (data.error ? "暂无本地歌词 · " + data.error : "暂无本地歌词"));
+    });
+    const autoToggle = document.createElement("input"); autoToggle.type = "checkbox"; autoToggle.checked = config.autoLyrics !== false;
+    autoToggle.addEventListener("change", () => configure({ autoLyrics: autoToggle.checked }));
+    settings.append(setting("联网自动匹配歌词 · QQ／网易云，时长差 ≤1 秒", autoToggle));
     $("lyric-offset").value = config.lyricOffset || 0;
     $("lyric-offset").addEventListener("change", event => { configure({ lyricOffset: Number(event.target.value) }); $("lyric-offset-label").value = event.target.value + " 秒"; });
     window.addEventListener("m3x-track", lyrics);
@@ -380,12 +437,17 @@
       if (event.detail.message || event.detail.error) ui.toast(event.detail.error || event.detail.message);
       if (event.detail.message === "歌词已保存") lyrics();
     });
-    let lastStatistics = "";
+    let lastStatistics = "", summarizedStats = null, statisticsStats = null, statisticsTracks = -1;
     function renderStatistics() {
       const stats = state.stats || {};
-      $("listening-minutes").textContent = Math.floor((stats.seconds || 0) / 60);
-      $("listening-count").textContent = Object.values(stats.counts || {}).reduce((sum, count) => sum + count, 0);
-      if (page !== "statistics") return;
+      // The bridge reuses one stats object between refreshes, so identity tells whether anything changed.
+      if (summarizedStats !== stats) {
+        summarizedStats = stats;
+        $("listening-minutes").textContent = Math.floor((stats.seconds || 0) / 60);
+        $("listening-count").textContent = Object.values(stats.counts || {}).reduce((sum, count) => sum + count, 0);
+      }
+      if (page !== "statistics" || (statisticsStats === stats && statisticsTracks === ui.tracks.length)) return;
+      statisticsStats = stats; statisticsTracks = ui.tracks.length;
       const key = JSON.stringify([stats, ui.tracks.length]); if (lastStatistics === key) return; lastStatistics = key;
       const calendar = stats.calendar || {}, days = calendar.days || {}, today = new Date(), dates = [];
       const dateKey = date => date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
@@ -427,11 +489,13 @@
       });
       if (!ranked.length) { const empty = document.createElement("p"); empty.className = "m3x-caption"; empty.textContent = "暂无有效聆听记录"; $("listening-ranking").append(empty); }
     }
-    window.addEventListener("m3x-render", event => { page = event.detail.page; classificationSummary(); renderStatistics(); });
+    window.addEventListener("m3x-render", event => { page = event.detail.page; if (page === "lyrics") window.M3X_MOTION.centerLyric($("lyrics-lines").querySelector('[aria-current="true"]')); classificationSummary(); renderStatistics(); });
     window.addEventListener("m3x-native-state", event => {
       state = event.detail;
       config = state.settings || config;
       $("eq-enabled").checked = !!config.eq; $("eq-controls").hidden = !config.eq;
+      $("normalize-enabled").checked = config.normalize !== false; $("normalize-options").hidden = config.normalize === false;
+      $("normalize-status").textContent = loudnessSummary(state.loudness);
       $("eq-bands").hidden = Array.isArray(config.peq) && config.peq.length > 0;
       if (config.peq) $("eq-preset").value = "custom";
       const signal = document.querySelector('#signal-panel .m3x-signal');
@@ -447,7 +511,7 @@
       let next = -1; for (let i = 0; i < lines.length && lines[i].time <= time; i++) next = i;
       if (next !== active) {
         active = next; $("lyrics-lines").querySelectorAll("button").forEach((button, index) => {
-          button.setAttribute("aria-current", String(index === active)); if (index === active && page === "lyrics") button.scrollIntoView({ block: "center" });
+          button.setAttribute("aria-current", String(index === active)); if (index === active && page === "lyrics") window.M3X_MOTION.centerLyric(button);
         });
       }
       renderStatistics();

@@ -102,8 +102,32 @@ final class LyricsManager {
                         if (source == null) throw new IOException("请先选择候选歌词");
                         if (!input.has("token") && !source.optString("revision").equals(input.optString("revision"))) throw new IOException("歌词标注已变更，请重新打开");
                         JSONObject doc = LyricsDocument.annotations(source, input.getJSONObject("annotations"));
+                        doc.remove("auto"); // Saving from the panel is a manual confirmation.
                         doc.put("revision", UUID.randomUUID().toString()).put("selectedAt", System.currentTimeMillis()).put("trackSignature", signature(track(id)));
                         write(file(id, ".json"), doc); result.put("document", doc).put("message", "歌词和逐曲标注已离线保存"); break;
+                    }
+                    case "auto": {
+                        JSONObject t = track(id);
+                        result.put("document", JSONObject.NULL);
+                        if (selected(id) != null) { result.put("state", "selected"); break; }
+                        File marker = file(id, ".auto"); JSONObject previous = read(marker);
+                        if (!input.optBoolean("force") && previous != null && signature(t).equals(previous.optString("trackSignature"))
+                            && System.currentTimeMillis() - previous.optLong("checkedAt") < 86400000L) { result.put("state", "none"); break; }
+                        if (!online()) { result.put("state", "offline"); break; }
+                        boolean[] transientFailure = {false};
+                        JSONObject doc = autoMatch(t, transientFailure);
+                        if (doc == null) {
+                            if (!transientFailure[0]) write(marker, json("trackSignature", signature(t), "checkedAt", System.currentTimeMillis()));
+                            result.put("state", transientFailure[0] ? "error" : "none"); break;
+                        }
+                        // A manual choice made while the search ran always wins.
+                        if (selected(id) != null) { result.put("state", "selected"); break; }
+                        doc.put("trackId", id).put("uri", t.getString("uri")).put("revision", UUID.randomUUID().toString())
+                            .put("selectedAt", System.currentTimeMillis()).put("trackSignature", signature(t));
+                        write(file(id, ".json"), doc); new AtomicFile(marker).delete();
+                        result.put("document", doc).put("state", "applied").put("message", "已自动匹配" + (doc.optString("provider").equals("NE") ? "网易云音乐" : "QQ 音乐")
+                            + "歌词 · 时长差 " + Math.abs(doc.optLong("durationDeltaMs")) + " ms");
+                        break;
                     }
                     case "embed": {
                         JSONObject doc = selected(id);
@@ -124,6 +148,52 @@ final class LyricsManager {
             }
             activity.lyricsResult(result);
         }); } catch (RejectedExecutionException error) { activity.lyricsResult(json("id", id, "operation", operation, "requestId", request, "error", "请求过多，请等待当前操作完成")); }
+    }
+    private boolean online() {
+        android.net.ConnectivityManager manager = (android.net.ConnectivityManager) app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+        android.net.NetworkInfo network = manager == null ? null : manager.getActiveNetworkInfo();
+        return network != null && network.isConnected();
+    }
+    private JSONObject accept(JSONObject candidate, long delta, boolean[] transientFailure) {
+        try {
+            JSONObject doc = providers.fetch(candidate);
+            if (LyricsAutoMatch.placeholder(doc.getString("original"))) return null;
+            return doc.put("auto", true).put("durationDeltaMs", delta)
+                .put("note", "自动匹配 · 时长差 " + Math.abs(delta) + " ms");
+        } catch (Exception error) {
+            // Missing lyrics for one release are normal; transport errors must not become a negative cache.
+            if (error instanceof IOException && !(error.getMessage() + "").contains("没有")) transientFailure[0] = true;
+            return null;
+        }
+    }
+    /** Searches QQ and NetEase, then adopts the best candidate whose duration differs by at most one second. */
+    private JSONObject autoMatch(JSONObject t, boolean[] transientFailure) throws Exception {
+        if (t.has("neteaseId")) {
+            JSONObject own = json("provider", "NE", "songId", t.getString("neteaseId"), "title", t.optString("title"),
+                "artist", t.optString("artist"), "album", t.optString("album"), "durationMs", Math.round(t.optDouble("duration") * 1000));
+            return accept(own, 0, transientFailure);
+        }
+        String title = t.optString("title").trim(), artist = t.optString("originalArtist", t.optString("artist")).trim();
+        if (title.isEmpty() || t.optDouble("duration", 0) <= 0) return null;
+        List<String> queries = new ArrayList<>();
+        queries.add((title + " " + artist).trim()); if (!artist.isEmpty()) queries.add(title);
+        Set<String> tried = new HashSet<>();
+        for (String query : queries) {
+            query = query.length() > 250 ? query.substring(0, 250) : query;
+            JSONArray qq = null, ne = null; Exception failure = null;
+            try { qq = providers.search("QQ", query); } catch (Exception error) { failure = error; }
+            try { ne = providers.search("NE", query); } catch (Exception error) { failure = error; }
+            if (qq == null && ne == null) { transientFailure[0] = true; android.util.Log.w("M3X.Lyrics", "auto search failed", failure); return null; }
+            if (qq == null || ne == null) transientFailure[0] = true;
+            int fetched = 0;
+            for (JSONObject candidate : LyricsAutoMatch.rank(t, qq, ne)) {
+                if (!tried.add(candidate.optString("provider") + ":" + candidate.optString("songId"))) continue;
+                if (fetched++ >= LyricsAutoMatch.MAX_FETCHES) break;
+                JSONObject doc = accept(candidate, candidate.optLong("durationDeltaMs"), transientFailure);
+                if (doc != null) { transientFailure[0] = false; return doc; }
+            }
+        }
+        return null;
     }
     static boolean writable(JSONObject t) {
         String scheme = Uri.parse(t.optString("uri")).getScheme();

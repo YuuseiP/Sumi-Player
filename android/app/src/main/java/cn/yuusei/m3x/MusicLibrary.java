@@ -44,8 +44,12 @@ public final class MusicLibrary {
         setTracks(list); persistCatalog();
     }
     private final AtomicFile catalog;
+    /** Fingerprint of the rules + APK that produced library.json; equal fingerprint = catalog already classified. */
+    private final AtomicFile classifiedMarker;
+    private volatile String fingerprint;
     private final AtomicFile scanReport;
     private ArtistClassification classification;
+    private PreferenceRules preferenceRules;
     private final ConcurrentMap<String, Object> artworkLocks = new ConcurrentHashMap<>();
     private final Map<String, Boolean> documentProviders = new ConcurrentHashMap<>();
     public final File artwork;
@@ -62,6 +66,7 @@ public final class MusicLibrary {
     MusicLibrary(PlayerApp context, boolean loadNow) {
         app = context;
         catalog = new AtomicFile(new File(app.getFilesDir(), "library.json"));
+        classifiedMarker = new AtomicFile(new File(app.getFilesDir(), "library.classified"));
         scanReport = new AtomicFile(new File(app.getFilesDir(), "scan-report.json"));
         artwork = new File(app.getCacheDir(), "covers"); artwork.mkdirs();
         lyrics = new File(app.getFilesDir(), "lyrics"); lyrics.mkdirs();
@@ -70,8 +75,13 @@ public final class MusicLibrary {
     void load() {
         long started = SystemClock.elapsedRealtime();
         try {
-            classification = new ArtistClassification(new JSONObject(new String(
-                read(app.getAssets().open("player/artist-classification.json"), 16 * 1024 * 1024), "UTF-8")));
+            byte[] classes = read(app.getAssets().open("player/artist-classification.json"), 16 * 1024 * 1024);
+            byte[] rules = read(app.getAssets().open("player/preference-rules.json"), 1024 * 1024);
+            classification = new ArtistClassification(new JSONObject(new String(classes, "UTF-8")));
+            preferenceRules = new PreferenceRules(new JSONObject(new String(rules, "UTF-8")));
+            // Code changes ship with a new install, so the install time covers the Java rules as well.
+            long installed = app.getPackageManager().getPackageInfo(app.getPackageName(), 0).lastUpdateTime;
+            fingerprint = hash(hash(classes) + ":" + hash(rules) + ":" + installed);
         } catch (Exception error) { throw new IllegalStateException("内置分类配置不可读取", error); }
         android.util.Log.i("M3X.Perf", "classification parsed in " + (SystemClock.elapsedRealtime() - started) + " ms");
         try {
@@ -79,8 +89,16 @@ public final class MusicLibrary {
             android.util.Log.i("M3X.Perf", "catalog parsed in " + (SystemClock.elapsedRealtime() - started) + " ms");
             List<JSONObject> list = new ArrayList<>();
             for (int i = 0; i < saved.length(); i++) list.add(saved.getJSONObject(i));
-            setTracks(list);
-            android.util.Log.i("M3X.Perf", "catalog ready: " + list.size() + " tracks in " + (SystemClock.elapsedRealtime() - started) + " ms");
+            String marker = "";
+            try { marker = new String(read(classifiedMarker.openRead(), 1024), "UTF-8"); } catch (Exception missing) { /* first start or invalidated */ }
+            if (fingerprint.equals(marker) && adoptClassified(list)) {
+                android.util.Log.i("M3X.Perf", "catalog adopted without re-classification: " + list.size() + " tracks in " + (SystemClock.elapsedRealtime() - started) + " ms");
+            } else {
+                setTracks(list);
+                android.util.Log.i("M3X.Perf", "catalog ready: " + list.size() + " tracks in " + (SystemClock.elapsedRealtime() - started) + " ms");
+                // Store the classified result once (after start-up finishes) so later starts take the fast path.
+                app.jobs.execute(() -> { try { persistCatalog(); } catch (Exception error) { android.util.Log.w("M3X.Library", "catalog", error); } });
+            }
         } catch (Exception ignored) {}
         try { scan = new JSONObject(new String(read(scanReport.openRead(), 16 * 1024 * 1024), "UTF-8")); }
         catch (Exception ignored) {}
@@ -165,6 +183,7 @@ public final class MusicLibrary {
             directories.put(json("path", path));
         }
         return json("tracks", list, "scan", scan, "options", options, "directories", directories,
+            "preferenceRules", json("schema", 1, "categories", preferenceRules.categories),
             "folder", roots.length() + " 个固定音乐目录",
             "classification", json("status", "confirmed", "builtin", true, "baseline", classification.baseline,
                 "trackCount", classification.trackCount, "matched", matched, "entities", new JSONArray(entities.values())));
@@ -181,16 +200,33 @@ public final class MusicLibrary {
         List<JSONObject> classified = new ArrayList<>();
         for (JSONObject item : list) {
             long started = System.nanoTime();
-            Uri uri = Uri.parse(item.optString("uri"));
-            String path = classificationPath(uri);
+            String location = item.optString("uri");
+            // Online tracks have no classification path; skip URI parsing for them.
+            boolean remote = location.startsWith("http:") || location.startsWith("https:") || location.startsWith(NeteaseClient.SCHEME + ":");
+            String path = remote ? "" : classificationPath(Uri.parse(location));
             located += System.nanoTime() - started;
             started = System.nanoTime();
-            JSONObject track = classification.apply(item, "http".equals(uri.getScheme()) || "https".equals(uri.getScheme()) ? "" : path == null ? "" : path);
+            JSONObject track = classification.apply(item, path == null ? "" : path);
+            preferenceRules.annotate(track);
             applied += System.nanoTime() - started;
             index.put(track.optString("id"), track); classified.add(track);
         }
         byId = index; tracks = classified;
         android.util.Log.i("M3X.Perf", "track locations=" + located / 1000000 + " ms classification=" + applied / 1000000 + " ms");
+    }
+
+    /**
+     * Start-up fast path: the saved catalog was produced by these exact rules, so its classification and
+     * preference annotations are reused as-is. Any track that does not look classified aborts to the full path.
+     */
+    private boolean adoptClassified(List<JSONObject> list) throws Exception {
+        Map<String, JSONObject> index = new HashMap<>();
+        for (JSONObject track : list) {
+            if (!track.has("preference") || !classification.relink(track)) return false;
+            index.put(track.optString("id"), track);
+        }
+        byId = index; tracks = list;
+        return true;
     }
 
     public List<JSONObject> all() { return tracks; }
@@ -286,7 +322,7 @@ public final class MusicLibrary {
 
     private void performScan() {
         List<JSONObject> result = new ArrayList<>();
-        for (JSONObject track : tracks) if (track.optString("uri").startsWith("https://") || track.optString("uri").startsWith("http://")) result.add(track);
+        for (JSONObject track : tracks) if (track.optString("uri").startsWith("https://") || track.optString("uri").startsWith("http://") || track.optString("uri").startsWith(NeteaseClient.SCHEME + ":")) result.add(track);
         int done = 0, failed = 0, skipped = 0, cueFailed = 0, unsupported = 0;
         List<JSONObject> errors = new ArrayList<>();
         long started = SystemClock.elapsedRealtime();
@@ -373,11 +409,9 @@ public final class MusicLibrary {
                 scan = json("running", true, "phase", "metadata", "total", sources.size(), "processed", ++done, "failed", failed, "skipped", skipped);
             }
             if (!cancelled) {
-                JSONArray saved = new JSONArray(); for (JSONObject item : result) saved.put(item);
-                FileOutputStream output = catalog.startWrite();
-                try { output.write(saved.toString().getBytes("UTF-8")); catalog.finishWrite(output); }
-                catch (Exception error) { catalog.failWrite(output); throw error; }
+                // Persist the classified list so the next start can adopt it without re-classifying.
                 setTracks(result);
+                persistCatalog();
             }
             finished = json("running", false, "processed", done, "total", sources.size(), "failed", failed,
                 "cueFailed", cueFailed, "unsupported", unsupported, "skipped", skipped, "cancelled", cancelled,
@@ -439,11 +473,81 @@ public final class MusicLibrary {
         list.removeIf(track -> track.optString("id").equals(id)); list.add(item); setTracks(list); persistCatalog(); return item;
     }
 
+    /**
+     * NetEase songs are stored by song ID; the playable address is resolved when playback opens the source.
+     * Incremental: only new or outdated entries are classified, and the catalog is written only when it changed.
+     * Returns {ids, tracks}: tracks are the snapshot-shaped entries the UI must merge.
+     */
+    public synchronized JSONObject importNetease(JSONArray songs) throws Exception {
+        Map<String, Integer> position = new HashMap<>();
+        List<JSONObject> list = new ArrayList<>(tracks);
+        for (int i = 0; i < list.size(); i++) position.put(list.get(i).optString("id"), i);
+        Map<String, JSONObject> index = new HashMap<>(byId);
+        JSONArray ids = new JSONArray(), changed = new JSONArray();
+        Set<String> seen = new HashSet<>();
+        for (int i = 0; i < songs.length(); i++) {
+            JSONObject song = songs.getJSONObject(i);
+            String songId = song.getString("id");
+            if (!songId.matches("[0-9]{1,20}")) throw new IOException("网易云歌曲编号无效");
+            String id = hash("netease:" + songId);
+            if (!seen.add(id)) continue;
+            ids.put(id);
+            JSONObject old = index.get(id);
+            // Same song already imported with current metadata: nothing to classify or persist.
+            if (old != null && old.has("neteaseAlbumId") && old.optString("neteaseAlbumId").equals(song.optString("albumId")) && old.optInt("neteaseFee") == song.optInt("fee")) continue;
+            String title = song.optString("title", "网易云歌曲"), cover = song.optString("cover");
+            JSONObject item = json("id", id, "uri", NeteaseClient.SCHEME + "://song/" + songId, "path", "网易云音乐/" + title,
+                "src", "native/" + id, "filename", songId + ".netease", "title", title, "artist", song.optString("artist", "网易云音乐"),
+                "album", song.optString("album", "网易云音乐"), "folder", "网易云音乐", "codec", "网易云",
+                "duration", Math.max(0, song.optLong("durationMs") / 1000d), "bits", 0, "sampleRate", 0, "channels", 0, "bytes", 0,
+                "cover", NeteaseClient.coverPath(cover), "neteaseId", songId, "neteaseFee", song.optInt("fee"),
+                "neteaseArtistId", song.optString("artistId"), "neteaseAlbumId", song.optString("albumId"),
+                "added", old != null ? old.optLong("added", System.currentTimeMillis()) : System.currentTimeMillis());
+            JSONObject track = classification.apply(item, "");
+            preferenceRules.annotate(track);
+            Integer at = position.get(id);
+            if (at != null) list.set(at, track); else { position.put(id, list.size()); list.add(track); }
+            index.put(id, track);
+            changed.put(summary(track));
+        }
+        if (changed.length() > 0) {
+            byId = index; tracks = list;
+            app.jobs.execute(() -> { try { persistCatalog(); } catch (Exception error) { android.util.Log.w("M3X.Library", "catalog", error); } });
+        }
+        return json("ids", ids, "tracks", changed);
+    }
+
+    /** The UI-facing copy of a track (no location or embedded lyrics), as in {@link #snapshot()}. */
+    static JSONObject summary(JSONObject item) {
+        JSONObject summary = new JSONObject();
+        try {
+            for (Iterator<String> keys = item.keys(); keys.hasNext();) {
+                String key = keys.next();
+                if (!key.equals("uri") && !key.equals("path") && !key.equals("embeddedLyrics")) summary.put(key, item.get(key));
+            }
+        } catch (org.json.JSONException error) { throw new IllegalStateException(error); }
+        return summary;
+    }
+    public synchronized int removeNetease(java.util.Set<String> keep) throws Exception {
+        List<JSONObject> list = new ArrayList<>(tracks);
+        int before = list.size();
+        list.removeIf(track -> track.has("neteaseId") && !keep.contains(track.optString("id")));
+        setTracks(list); persistCatalog(); return before - list.size();
+    }
+
     private synchronized void persistCatalog() throws Exception {
         JSONArray saved = new JSONArray(); for (JSONObject item : tracks) saved.put(item);
+        // Invalidate first: a crash between the two writes must never pair a new catalog with an old marker.
+        classifiedMarker.delete();
         FileOutputStream output = catalog.startWrite();
         try { output.write(saved.toString().getBytes("UTF-8")); catalog.finishWrite(output); }
         catch (Exception error) { catalog.failWrite(output); throw error; }
+        // Every list in `tracks` went through classification + preference annotation with the current rules.
+        if (fingerprint != null) {
+            FileOutputStream marker = classifiedMarker.startWrite();
+            try { marker.write(fingerprint.getBytes("UTF-8")); classifiedMarker.finishWrite(marker); }
+            catch (Exception error) { classifiedMarker.failWrite(marker); }
+        }
     }
 
     private JSONObject probe(Source source) throws Exception {

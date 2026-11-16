@@ -8,24 +8,28 @@
   <link rel="icon" href="covers/01.jpg">
   <link rel="stylesheet" href="styles.css">
   <script defer src="tracks.js"></script>
-  <script defer src="appearance.js"></script><script defer src="app.js"></script>
+  <script defer src="appearance.js"></script><script defer src="motion.js"></script><script defer src="preferences.js"></script><script defer src="library-navigation.js"></script><script defer src="app.js"></script>
   <script defer src="avatar.js"></script>
   <script defer src="player-tools.js"></script>
+  <script defer src="netease.js"></script>
+  <script defer src="ambient.js"></script>
   <script defer src="classification.js"></script>
 </head>
 <body>
   <div id="m3x-concept">
     <div class="m3x-screen" data-layout="album" aria-label="澄播放器">
       <nav class="m3x-nav" aria-label="播放器导航">
-        <button type="button" data-page="library"><i data-icon="library"></i>曲库</button>
+        <button type="button" data-page="library" data-source="local"><i data-icon="library"></i>曲库</button>
+        <button type="button" data-page="netease" data-source="netease"><i data-icon="cloud"></i>发现</button>
         <button type="button" data-page="player"><i data-icon="disc"></i>播放</button>
-        <button type="button" data-page="profile"><i data-icon="user"></i>我的</button>
+        <button type="button" data-page="profile" data-source="local"><i data-icon="user"></i>我的</button>
+        <button type="button" data-page="netease-me" data-source="netease"><i data-icon="user"></i>我的</button>
       </nav>
       <div class="m3x-endfield-band" aria-hidden="true"><b>ENDFIELD / AUDIO</b><span>终末地 · 本地音乐</span></div><main class="m3x-content">
         <section class="m3x-panel m3x-player" data-panel="player" aria-label="正在播放" hidden>
           <button type="button" class="m3x-cover-open" data-page="lyrics" aria-label="查看歌词"><img class="m3x-cover" alt="" width="240" height="240"></button>
           <div class="m3x-song">
-            <div class="m3x-song-text"><h2 class="m3x-title" data-text="title"></h2><div class="m3x-artist" data-text="singer"></div><div class="m3x-album" data-text="album"></div></div>
+            <div class="m3x-song-text"><h2 class="m3x-title" data-text="title"></h2><button type="button" class="m3x-artist m3x-song-link" data-action="open-song-artist" aria-label="打开当前歌曲的歌手" data-text="singer"></button><button type="button" class="m3x-album m3x-song-link" data-action="open-song-album" aria-label="打开当前歌曲的专辑" data-text="album"></button></div>
           </div>
           <div class="m3x-player-tools"><span class="m3x-metadata" data-text="format"></span><button type="button" class="m3x-icon" data-action="favorite" aria-label="收藏当前歌曲" aria-pressed="false"><i data-icon="heart"></i></button><button type="button" class="m3x-icon" data-action="add-playlist" aria-label="添加到歌单"><i data-icon="add-list"></i></button><button type="button" class="m3x-icon" data-action="song-menu" aria-label="更多歌曲操作"><i data-icon="more"></i></button></div>
           <div class="m3x-seek">
@@ -40,6 +44,7 @@
             <button type="button" class="m3x-icon" data-page="queue" aria-label="打开播放队列"><i data-icon="queue"></i></button>
           </div>
           <button type="button" class="m3x-output" data-action="output" data-open-tab="signal" aria-haspopup="dialog" aria-expanded="false"><span>音频输出</span><i data-icon="up"></i></button>
+          <button type="button" class="m3x-output" data-action="ambient-mode"><span>伪息屏</span><small>封面与歌词 · 屏幕常亮</small></button>
           <div class="m3x-up-next"><button type="button" data-page="queue"><small>接下来</small><span data-text="next"></span><i data-icon="right"></i></button><div class="m3x-track-list" data-list="upcoming" aria-label="接下来播放"></div></div>
         </section>
         <section class="m3x-panel" data-panel="library" aria-label="本地曲库">
@@ -113,6 +118,23 @@
           <div class="m3x-playlist-toolbar"><button type="button" class="m3x-text-button" data-action="play-playlist"><i data-icon="play"></i>播放全部</button><span data-text="playlistCount"></span></div>
           <div class="m3x-track-list" data-list="playlist"></div>
         </section>
+        <section class="m3x-panel m3x-scroll m3x-ne" data-panel="netease" aria-label="网易云 · 发现" hidden>
+          <div class="m3x-page-heading"><h2 class="m3x-heading m3x-source-tabs" data-source-tabs></h2></div>
+          <form class="m3x-ne-searchbar" id="ne-search-form" role="search">
+            <input type="search" class="m3x-search" id="ne-search" maxlength="200" placeholder="搜索歌曲、歌手、歌单" aria-label="搜索网易云" enterkeyhint="search" autocomplete="off">
+            <button type="button" class="m3x-text-button" id="ne-search-cancel" hidden>取消</button>
+          </form>
+          <div id="ne-search-view" hidden></div>
+          <div id="ne-discover"></div>
+        </section>
+        <section class="m3x-panel m3x-scroll m3x-ne" data-panel="netease-list" aria-label="网易云歌单" hidden>
+          <div class="m3x-queue-heading"><button type="button" class="m3x-icon" id="ne-list-back" aria-label="返回"><i data-icon="back"></i></button><h2 id="ne-list-heading">歌单</h2></div>
+          <div id="ne-list-view"></div>
+        </section>
+        <section class="m3x-panel m3x-scroll m3x-ne" data-panel="netease-me" aria-label="网易云 · 我的" hidden>
+          <h2 class="m3x-heading">我的</h2>
+          <div id="ne-me-view"></div>
+        </section>
         <section class="m3x-panel m3x-scroll" data-panel="profile" aria-label="我的" hidden>
           <h2 class="m3x-heading">我的</h2>
           <div class="m3x-profile-identity">
@@ -130,7 +152,11 @@
         </section>
         <section class="m3x-panel" data-panel="settings" aria-label="软件设置" hidden>
           <div class="m3x-queue-heading"><button type="button" class="m3x-icon" data-page="profile" aria-label="返回我的"><i data-icon="back"></i></button><h2>软件设置</h2></div>
-          <div class="m3x-scroll m3x-settings-body">
+          <div class="m3x-sheet-tabs m3x-settings-tabs" role="tablist" aria-label="软件设置选项卡" data-settings-tabs>
+            <button type="button" id="general-settings-tab" role="tab" data-settings-tab="general" aria-controls="general-settings-panel" aria-selected="true">通用设置</button>
+            <button type="button" id="preferences-tab" role="tab" data-settings-tab="preferences" aria-controls="preferences-panel" aria-selected="false" tabindex="-1">听歌喜好</button>
+          </div>
+          <div class="m3x-scroll m3x-settings-body" id="general-settings-panel" role="tabpanel" aria-labelledby="general-settings-tab">
             <h3 class="m3x-section-label">外观</h3>
             <label class="m3x-setting"><span>明暗模式</span><select data-setting="theme" aria-label="主题"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
             <label class="m3x-setting"><span>界面主题</span><select data-setting="visualTheme" aria-label="界面主题"><option value="classic">澄 · 经典</option><option value="endfield">终末地 · 工业</option></select></label>
@@ -140,6 +166,7 @@
             <label class="m3x-setting"><span>以文件名显示歌曲</span><input type="checkbox" data-setting="filenameTitle" aria-label="以文件名显示歌曲"></label>
             <label class="m3x-setting"><span>列表显示封面</span><input type="checkbox" data-setting="showCovers" aria-label="列表显示封面" checked></label>
             <h3 class="m3x-section-label">播放与启动</h3>
+            <label class="m3x-setting"><span>减少动态效果</span><input type="checkbox" data-setting="reduceMotion" aria-label="减少动态效果"></label>
             <label class="m3x-setting"><span>默认启动页</span><select data-setting="startPage" aria-label="默认启动页"><option value="library">曲库</option><option value="player">播放</option><option value="profile">我的</option></select></label>
             <label class="m3x-setting"><span>记住播放进度</span><input type="checkbox" data-setting="rememberPosition" aria-label="记住播放进度" checked></label>
             <button type="button" class="m3x-setting m3x-setting-button" data-tool="sleep"><span>睡眠定时</span><span class="m3x-caption" id="sleep-summary">未开启</span><i data-icon="right"></i></button>
@@ -159,6 +186,19 @@
             <div class="m3x-setting"><span>本地曲库</span><span class="m3x-caption" data-text="librarySize"></span></div>
             <h3 class="m3x-section-label">关于</h3>
             <div class="m3x-setting"><span>版本</span><span class="m3x-caption">0.1</span></div>
+          </div>
+          <div class="m3x-scroll m3x-settings-body m3x-preferences" id="preferences-panel" role="tabpanel" aria-labelledby="preferences-tab" hidden>
+            <h3 class="m3x-section-label">自动跳过这些版本</h3>
+            <p class="m3x-caption">开启后立即保存，顺序、随机、歌单和后台播放均会跳过。正在播放的歌曲可播完。</p>
+            <p id="preference-summary" class="m3x-preference-summary" role="status"></p>
+            <div id="preference-rules"></div>
+            <p class="m3x-caption">单角色名版本按已知角色名精确识别。普通 Ver.、M@STER VERSION、合唱与混音不会仅因版本字样被排除。</p>
+            <h3 class="m3x-section-label">预览与例外</h3>
+            <button type="button" class="m3x-setting m3x-setting-button" data-preference-preview="all"><span>命中歌曲与逐首例外</span><span>查看 ›</span></button>
+            <button type="button" class="m3x-setting m3x-setting-button" data-preference-preview="exceptions"><span>管理始终保留／单独排除</span><span>查看 ›</span></button>
+            <button type="button" class="m3x-setting m3x-setting-button" data-preference-preview="review"><span>歌曲名与文件名待核对</span><span>查看 ›</span></button>
+            <label class="m3x-setting"><span>同时在曲库列表隐藏排除项</span><input type="checkbox" id="preference-hide" aria-label="在曲库列表隐藏排除项"></label>
+            <p class="m3x-caption">“始终保留”优先于排除规则。收藏不自动豁免；歌单内容保留。关闭规则或选择“跟随规则”即可恢复。</p>
           </div>
         </section>
       </main>
@@ -197,6 +237,9 @@
             </dl>
           </section>
           <section class="m3x-sheet-tab-panel" id="processing-panel" data-sheet-panel="processing" role="tabpanel" aria-labelledby="processing-tab" hidden>
+            <label class="m3x-setting"><span>响度均衡</span><input type="checkbox" id="normalize-enabled" data-preference="normalize" aria-label="响度均衡" checked></label>
+            <div id="normalize-options"><label class="m3x-setting"><span>目标响度</span><select id="normalize-target" aria-label="目标响度"><option value="-14">-14 LUFS · 较响</option><option value="-16">-16 LUFS · 标准</option><option value="-18">-18 LUFS · 更多余量</option></select></label></div>
+            <p class="m3x-caption" id="normalize-status"></p>
             <label class="m3x-setting"><span>均衡器 EQ</span><input type="checkbox" id="eq-enabled" data-preference="eq" aria-label="均衡器 EQ"></label>
             <div id="eq-controls" hidden><label class="m3x-setting"><span>预设</span><select id="eq-preset" aria-label="均衡器预设"><option value="flat">平直</option><option value="vocal">人声</option><option value="bass">低音</option><option value="bright">明亮</option><option value="custom">自定义</option></select></label><div id="eq-bands"></div><button type="button" class="m3x-text-button" id="eq-reset">重置均衡器</button></div>
             <label class="m3x-setting"><span>ReplayGain</span><select id="replaygain-mode" data-preference="replaygain" aria-label="ReplayGain"><option value="off">关闭</option><option value="track">单曲</option><option value="album">专辑</option></select></label>
@@ -204,11 +247,14 @@
           </section>
         </section>
       </dialog>
-      <dialog id="song-menu-dialog" class="m3x-sheet-overlay" aria-labelledby="song-menu-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><div class="m3x-sheet-handle" aria-hidden="true"></div><header class="m3x-sheet-header"><h2 id="song-menu-title">歌曲</h2><button type="button" class="m3x-icon" data-close aria-label="关闭歌曲菜单"><i data-icon="close"></i></button></header><p class="m3x-caption" id="song-menu-artist"></p><button type="button" class="m3x-sheet-action" data-action="play-next">下一首播放</button><button type="button" class="m3x-sheet-action" data-action="menu-add-playlist">添加到歌单</button><button type="button" class="m3x-sheet-action" data-action="song-info">歌曲信息</button><button type="button" class="m3x-sheet-action" data-action="hide-song">隐藏歌曲</button></section></dialog>
+      <dialog id="song-menu-dialog" class="m3x-sheet-overlay" aria-labelledby="song-menu-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><div class="m3x-sheet-handle" aria-hidden="true"></div><header class="m3x-sheet-header"><h2 id="song-menu-title">歌曲</h2><button type="button" class="m3x-icon" data-close aria-label="关闭歌曲菜单"><i data-icon="close"></i></button></header><p class="m3x-caption" id="song-menu-artist"></p><button type="button" class="m3x-sheet-action" data-action="play-next">下一首播放</button><button type="button" class="m3x-sheet-action" data-action="menu-add-playlist">添加到歌单</button><button type="button" class="m3x-sheet-action" data-action="menu-open-album">打开专辑</button><button type="button" class="m3x-sheet-action" data-action="menu-open-artist">打开歌手</button><button type="button" class="m3x-sheet-action" data-action="song-info">歌曲信息</button><button type="button" class="m3x-sheet-action" data-action="preference-song" id="menu-preference">听歌喜好：单独排除</button><button type="button" class="m3x-sheet-action" data-action="hide-song">隐藏歌曲</button></section></dialog>
+      <dialog id="song-artist-dialog" class="m3x-sheet-overlay" aria-labelledby="song-artist-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><header class="m3x-sheet-header"><h2 id="song-artist-title">选择歌手／角色／组合</h2><button type="button" class="m3x-icon" data-close aria-label="关闭歌手选择"><i data-icon="close"></i></button></header><div id="song-artist-choices" class="m3x-scroll"></div></section></dialog>
       <dialog id="info-dialog" class="m3x-sheet-overlay" aria-labelledby="song-info-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><header class="m3x-sheet-header"><h2 id="song-info-title">歌曲信息</h2><button type="button" class="m3x-icon" data-close aria-label="关闭歌曲信息"><i data-icon="close"></i></button></header><dl id="song-info" class="m3x-signal"></dl></section></dialog>
       <dialog id="sleep-dialog" class="m3x-sheet-overlay" aria-labelledby="sleep-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><header class="m3x-sheet-header"><h2 id="sleep-title">睡眠定时</h2><button type="button" class="m3x-icon" data-close aria-label="关闭睡眠定时"><i data-icon="close"></i></button></header><form id="sleep-form"><label class="m3x-setting"><span>分钟</span><input id="sleep-minutes" type="number" min="1" max="180" value="30" required aria-label="睡眠定时分钟"></label><label class="m3x-setting"><span>播完当前歌曲再停止</span><input type="checkbox" id="sleep-finish-song" aria-label="播完当前歌曲再停止"></label><p class="m3x-caption" id="sleep-status">未开启</p><div class="m3x-inline-form"><button type="button" class="m3x-text-button" id="sleep-cancel">关闭定时</button><button type="submit" class="m3x-primary">开始定时</button></div></form></section></dialog>
       <dialog id="scan-options-dialog" class="m3x-sheet-overlay" aria-labelledby="scan-options-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><header class="m3x-sheet-header"><h2 id="scan-options-title">扫描筛选</h2><button type="button" class="m3x-icon" data-close aria-label="关闭扫描筛选"><i data-icon="close"></i></button></header><form id="scan-options-form"><label class="m3x-setting"><span>屏蔽 60 秒以下音频</span><input type="checkbox" id="skip-short" aria-label="屏蔽短音频"></label><label class="m3x-section-label" for="excluded-folders">屏蔽子目录（每行一个相对路径）</label><textarea id="excluded-folders" rows="4" placeholder="例如：Podcasts"></textarea><p id="scan-options-error" class="m3x-error" role="status" hidden></p><button type="submit" class="m3x-primary">保存筛选</button></form></section></dialog>
       <dialog id="hidden-dialog" class="m3x-sheet-overlay" aria-labelledby="hidden-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><header class="m3x-sheet-header"><h2 id="hidden-title">隐藏的歌曲</h2><button type="button" class="m3x-icon" data-close aria-label="关闭隐藏歌曲"><i data-icon="close"></i></button></header><button type="button" class="m3x-text-button" data-action="restore-all">全部恢复</button><div id="hidden-list"></div></section></dialog>
+      <dialog id="preference-preview-dialog" class="m3x-sheet-overlay" aria-labelledby="preference-preview-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet m3x-preference-preview"><header class="m3x-sheet-header"><h2 id="preference-preview-title">命中歌曲</h2><button type="button" class="m3x-icon" data-close aria-label="关闭喜好预览"><i data-icon="close"></i></button></header><input type="search" id="preference-search" class="classification-search" aria-label="搜索命中歌曲" placeholder="搜索歌曲、歌手或专辑"><p id="preference-preview-count" class="m3x-caption" role="status"></p><div id="preference-preview-list" class="m3x-scroll"></div><button type="button" id="preference-more" class="m3x-text-button">加载更多</button></section></dialog>
+      <dialog id="preference-play-dialog" class="m3x-sheet-overlay" aria-labelledby="preference-play-title"><div class="m3x-sheet-scrim" aria-hidden="true"></div><section class="m3x-sheet"><header class="m3x-sheet-header"><h2 id="preference-play-title">歌曲已被听歌喜好排除</h2><button type="button" class="m3x-icon" data-close aria-label="取消播放"><i data-icon="close"></i></button></header><p id="preference-play-song" class="m3x-caption"></p><button type="button" class="m3x-sheet-action" id="preference-play-once">仅播放一次</button><button type="button" class="m3x-sheet-action" id="preference-play-keep">始终保留并播放</button></section></dialog>
       <dialog id="playlist-dialog" class="m3x-sheet-overlay" aria-labelledby="playlist-dialog-title">
         <div class="m3x-sheet-scrim" aria-hidden="true"></div>
         <section class="m3x-sheet">
@@ -241,6 +287,17 @@
           <button type="button" class="m3x-primary" id="select-folder">使用此目录</button>
         </section>
       </dialog>
+      <section id="ambient-display" role="dialog" aria-modal="true" aria-label="伪息屏：专辑封面和歌词，轻触显示操作" tabindex="-1" hidden>
+        <div id="ambient-content">
+          <img id="ambient-cover" src="cover-placeholder.svg" alt="专辑封面">
+          <div id="ambient-lyrics" aria-label="同步歌词"><div id="ambient-lines"></div></div>
+        </div>
+        <div id="ambient-controls" aria-label="伪息屏播放控件" hidden>
+          <div class="ambient-progress"><span id="ambient-position">0:00</span><input id="ambient-seek" type="range" min="0" max="1" step="0.1" value="0" aria-label="伪息屏播放进度"><span id="ambient-duration">0:00</span></div>
+          <div class="ambient-transport"><button type="button" id="ambient-rotate" aria-label="旋转屏幕" hidden>旋转</button><div><button type="button" data-ambient-action="previous" aria-label="上一首">上一首</button><button type="button" data-ambient-action="play" aria-label="播放">播放</button><button type="button" data-ambient-action="next" aria-label="下一首">下一首</button></div><button type="button" id="ambient-exit">退出</button></div>
+          <p id="ambient-hint">随设备姿态旋转 · 点击空白处隐藏</p>
+        </div>
+      </section>
       <div class="m3x-live" aria-live="polite" aria-atomic="true"></div>
     </div>
     <audio id="audio" preload="metadata"></audio>

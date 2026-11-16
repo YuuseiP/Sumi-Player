@@ -28,9 +28,13 @@
   const cache = new Map();
   let request = 0, currentKey = "", currentHue = fallback, options, currentTrack;
   const system = global.matchMedia("(prefers-color-scheme: dark)");
+  let lastPaint = "", barContext;
   function paint() {
     const screen = document.querySelector(".m3x-screen");
     const dark = options.theme === "dark" || (options.theme === "system" && system.matches);
+    const paintKey = [dark, options.visualTheme, options.colorMode, currentHue].join(":");
+    if (paintKey === lastPaint) return;
+    lastPaint = paintKey;
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
     screen.dataset.visualTheme = options.visualTheme;
@@ -43,7 +47,11 @@
       else screen.style.removeProperty("--m3x-" + key);
     }
     const bg = colors ? colors.bg : dark ? "#191a18" : "#f5f2eb";
-    const bar = document.createElement("canvas").getContext("2d");
+    if (!barContext) {
+      const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+      barContext = canvas.getContext("2d");
+    }
+    const bar = barContext;
     bar.fillStyle = bg;
     if (global.nativeCommand && paint.lastBar !== bar.fillStyle + dark) {
       paint.lastBar = bar.fillStyle + dark;

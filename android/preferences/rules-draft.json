@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "status": "implemented",
+  "enabled_rules": [],
+  "normalization": "NFKC, casefold; preserve original text",
+  "context": "A marker must end a title/version label or precede a trailing quality/source tag. A marker embedded in ordinary title prose is not sufficient.",
+  "rules": [
+    {"id": "instrumental", "category": "backing", "label": "Instrumental", "pattern": "(?<![a-z])instrumental(?![a-z])"},
+    {"id": "off-vocal", "category": "backing", "label": "Off Vocal", "pattern": "(?<![a-z])off[\\s._-]*vocal(?![a-z])"},
+    {"id": "karaoke", "category": "backing", "label": "卡拉 OK 伴奏", "pattern": "(?:オリジナル[\\s・._-]*)?カラオケ|(?<![a-z])karaoke(?![a-z])"},
+    {"id": "vocal-less", "category": "backing", "label": "Vocal Less", "pattern": "(?<![a-z])(?:vocal[\\s._-]*less|without[\\s._-]+vocals?)(?![a-z])"},
+    {"id": "inst-abbreviation", "category": "backing", "label": "Inst. 版本", "pattern": "(?<![a-z])inst\\.(?=$|[\\s)\\]】_-])"},
+    {"id": "solo-version", "category": "solo-explicit", "label": "Solo ver. / Solo version", "pattern": "(?<![a-z])solo[\\s・._-]*(?:version|ver\\.?)(?![a-z])"},
+    {"id": "solo-remix", "category": "solo-explicit", "label": "Solo remix", "pattern": "(?<![a-z])solo[\\s・._-]*remix(?![a-z])"},
+    {"id": "japanese-solo", "category": "solo-explicit", "label": "ソロ・リミックス / ソロ Ver. / ソロ・バージョン", "pattern": "ソロ[\\s・._-]*(?:リミックス|バージョン|version|ver\\.?)(?![a-z])"},
+    {"id": "short-version", "category": "short", "label": "Game / TV / Short 版本（独立选项）", "pattern": "(?<![a-z])(?:game|tv|short)[\\s._-]*(?:version|ver\\.?|size)(?![a-z])"},
+    {"id": "piano-arrange", "category": "piano", "label": "Piano Arrange（独立选项）", "pattern": "(?<![a-z])piano[\\s._-]+arrange(?:[\\s._-]+version)?(?![a-z])"}
+  ],
+  "named_group_version": {
+    "id": "named-group-version",
+    "category": "group-named",
+    "label": "已知组合名 Ver.（独立选项）",
+    "source": "artist-classification/semantic/credits.json",
+    "match": "A parenthesized or bracketed version label whose entire subject equals one known group or its unambiguous original artist alias after NFKC and whitespace removal."
+  },
+  "named_character_version": {
+    "id": "named-character-version",
+    "category": "solo-named",
+    "label": "单个已知角色名 Ver.（独立选项）",
+    "source": "artist-classification/semantic/credits.json",
+    "match": "A parenthesized or bracketed version label whose entire subject equals one known character after NFKC and whitespace removal."
+  }
+}

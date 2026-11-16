@@ -128,13 +128,14 @@
       snapshot = nativeCommand("pause"); oldPlaying = !snapshot.paused;
       send(snapshot.paused ? "pause" : "play");
     };
-    let pollTimer;
-    const poll = () => {
-      clearTimeout(pollTimer);
-      if (document.hidden) return;
-      pollTimer = setTimeout(poll, snapshot.paused ? 1200 : 400);
-      const state = nativeCommand("poll");
-      if (!state || state.error === "播放服务正在启动") return;
+    audio.skip = previous => {
+      const state = nativeCommand(previous ? "previous" : "next");
+      if (!state.error) syncSnapshot(state);
+    };
+    let pollTimer, lastStats = null, statsAt = 0;
+    function syncSnapshot(state) {
+      // Stats arrive only every few seconds; keep the latest copy on every state.
+      if (state.stats) { lastStats = state.stats; statsAt = Date.now(); } else if (lastStats) state.stats = lastStats;
       snapshot = state;
       if (state.id && window.M3X_UI && !window.M3X_UI.tracks.some(track => track.id === state.id)) {
         window.dispatchEvent(new Event("m3x-native-library"));
@@ -149,6 +150,17 @@
       if (!state.paused !== oldPlaying) { oldPlaying = !state.paused; send(oldPlaying ? "play" : "pause"); }
       send("timeupdate");
       window.dispatchEvent(new CustomEvent("m3x-native-state", { detail: state }));
+    }
+    const poll = () => {
+      clearTimeout(pollTimer);
+      if (document.hidden) return;
+      // Fast ticks only where progress or lyrics are visible; elsewhere once a second is enough.
+      const page = window.M3X_UI?.page?.(), live = ["player", "lyrics", "queue"].includes(page) || window.M3X_AMBIENT?.active?.();
+      pollTimer = setTimeout(poll, snapshot.paused ? 1500 : live ? 400 : 1000);
+      const statsPage = page === "statistics" || page === "profile";
+      const state = nativeCommand("poll", { stats: !lastStats || Date.now() - statsAt > (statsPage ? 3000 : 15000) });
+      if (!state || state.error === "播放服务正在启动") return;
+      syncSnapshot(state);
     };
     pollTimer = setTimeout(poll, 400);
     document.addEventListener("visibilitychange", poll);

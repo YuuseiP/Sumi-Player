@@ -4,7 +4,10 @@ import android.Manifest;
 import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
+import android.content.pm.ActivityInfo;
 import android.graphics.Color;
+import android.hardware.Sensor;
+import android.hardware.SensorManager;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.*;
@@ -24,7 +27,10 @@ public final class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private String documentAction = "";
     private JSONObject documentData;
-    private static final int DIRECTORY = 10, FILE = 11, EXPORT = 12, IMPORT = 13, STORAGE = 20;
+    private boolean ambientDisplay, ambientKeptAwake;
+    private int ambientOrientation, ambientSystemUi, ambientStatusColor, ambientNavigationColor;
+    private static final int DIRECTORY = 10, FILE = 11, EXPORT = 12, IMPORT = 13, NETEASE_LOGIN = 14, STORAGE = 20;
+    private String neteaseLoginRequest = "";
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -57,6 +63,10 @@ public final class MainActivity extends Activity {
                 if (path.isEmpty()) path = "index.html";
                 try {
                     if (path.contains("..")) throw new IOException();
+                    if (path.startsWith("netease-cover/")) {
+                        try { return response("image/jpeg", NeteaseClient.cover(uri.getQueryParameter("u"))); }
+                        catch (Exception error) { return response("image/svg+xml", getAssets().open("player/cover-placeholder.svg")); }
+                    }
                     if (path.startsWith("native-covers/")) {
                         File cover = new File(app.library.artwork, path.substring("native-covers/".length()));
                         if (cover.isFile()) return response("image/jpeg", new FileInputStream(cover));
@@ -140,6 +150,13 @@ public final class MainActivity extends Activity {
             if (fileCallback != null) fileCallback.onReceiveValue(result == RESULT_OK && intent != null ? new Uri[]{intent.getData()} : null);
             fileCallback = null; return;
         }
+        if (requestCode == NETEASE_LOGIN) {
+            String request = neteaseLoginRequest; neteaseLoginRequest = "";
+            String cookie = result == RESULT_OK && intent != null ? intent.getStringExtra(NeteaseLoginActivity.EXTRA_COOKIE) : null;
+            if (cookie == null) neteaseResult(json("operation", "web-login", "requestId", request, "error", "已取消登录"));
+            else NeteaseClient.get().handle(this, json("operation", "cookie-login", "requestId", request, "cookie", cookie));
+            return;
+        }
         if (result != RESULT_OK || intent == null || intent.getData() == null) return;
         Uri uri = intent.getData();
         if (requestCode == DIRECTORY) {
@@ -188,11 +205,56 @@ public final class MainActivity extends Activity {
     @Override public void onBackPressed() {
         web.evaluateJavascript("(function(){var a=document.querySelectorAll('dialog[open]'),d=a[a.length-1];if(d){if(window.M3X_UI)M3X_UI.closeDialog(d,true);else d.close();return true;}return window.M3X_UI?M3X_UI.back():false;})()", result -> { if (!"true".equals(result)) moveTaskToBack(true); });
     }
-    @Override protected void onDestroy() { if (web != null) { web.removeJavascriptInterface("M3XNative"); web.destroy(); } super.onDestroy(); }
+    private boolean hasRotationSensor() {
+        SensorManager manager = (SensorManager)getSystemService(SENSOR_SERVICE);
+        return manager != null && manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null;
+    }
+    private void ambientDisplay(boolean enabled, String orientation) {
+        if (enabled) {
+            if (!ambientDisplay) {
+                ambientOrientation = getRequestedOrientation();
+                ambientSystemUi = getWindow().getDecorView().getSystemUiVisibility();
+                ambientStatusColor = getWindow().getStatusBarColor();
+                ambientNavigationColor = getWindow().getNavigationBarColor();
+                ambientKeptAwake = (getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0;
+            }
+            ambientDisplay = true;
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            getWindow().setStatusBarColor(Color.BLACK); getWindow().setNavigationBarColor(Color.BLACK);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+            if (hasRotationSensor()) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
+            else if ("landscape".equals(orientation)) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+            else if ("portrait".equals(orientation)) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            else setRequestedOrientation(getResources().getConfiguration().orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        } else if (ambientDisplay) {
+            ambientDisplay = false;
+            if (!ambientKeptAwake) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            getWindow().setStatusBarColor(ambientStatusColor); getWindow().setNavigationBarColor(ambientNavigationColor);
+            getWindow().getDecorView().setSystemUiVisibility(ambientSystemUi);
+            setRequestedOrientation(ambientOrientation);
+        }
+    }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused && ambientDisplay) getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+    @Override protected void onStop() {
+        if (ambientDisplay) {
+            ambientDisplay(false, "");
+            if (web != null) web.evaluateJavascript("if(window.M3X_AMBIENT)M3X_AMBIENT.exit()", null);
+        }
+        super.onStop();
+    }
+    @Override protected void onDestroy() { ambientDisplay(false, ""); if (web != null) { web.removeJavascriptInterface("M3XNative"); web.destroy(); } super.onDestroy(); }
 
     public void lyricsResult(JSONObject result) {
         runOnUiThread(() -> { if (web != null && !isDestroyed()) web.evaluateJavascript(
             "window.dispatchEvent(new CustomEvent('m3x-lyrics-result',{detail:" + result.toString() + "}))", null); });
+    }
+    public void neteaseResult(JSONObject result) {
+        runOnUiThread(() -> { if (web != null && !isDestroyed()) web.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('m3x-netease-result',{detail:" + result.toString() + "}))", null); });
     }
     public final class Bridge {
         @JavascriptInterface public String bootstrap() {
@@ -221,6 +283,12 @@ public final class MainActivity extends Activity {
                     switch (name) {
                         case "appearance-bars": {
                             int color = Color.parseColor(data.getString("color"));
+                            if (ambientDisplay) {
+                                ambientStatusColor = color; ambientNavigationColor = color;
+                                if (data.optBoolean("dark")) ambientSystemUi &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                                else ambientSystemUi |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                                return "{}";
+                            }
                             getWindow().setStatusBarColor(color); getWindow().setNavigationBarColor(color);
                             View decor = getWindow().getDecorView();
                             int flags = decor.getSystemUiVisibility();
@@ -228,13 +296,18 @@ public final class MainActivity extends Activity {
                             else flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
                             decor.setSystemUiVisibility(flags); return "{}";
                         }
-                        case "poll": return service.snapshot().toString();
+                        case "ambient-display":
+                            ambientDisplay(data.optBoolean("enabled"), data.optString("orientation", "auto"));
+                            return json("automaticRotation", hasRotationSensor()).toString();
+                        case "poll": return service.snapshot(data.optBoolean("stats")).toString();
                         case "queue": {
                             JSONArray ids = new JSONArray();
                             for (int i = 0; i < service.player.getMediaItemCount(); i++) ids.put(service.player.getMediaItemAt(i).mediaId);
-                            return json("ids", ids).toString();
+                            JSONArray sourceIds = app.settings("ui").optJSONArray("queue");
+                            return json("ids", ids, "sourceIds", sourceIds == null ? ids : sourceIds).toString();
                         }
                         case "load": service.load(data.getString("id"), data.optBoolean("play")); break;
+                        case "allow-track-once": service.allowTrackOnce(data.getString("id")); break;
                         case "play": service.play(); break;
                         case "pause": service.pause(); break;
                         case "next": service.next(false); break;
@@ -242,11 +315,17 @@ public final class MainActivity extends Activity {
                         case "seek": service.player.seekTo(Math.max(0, (long) (data.getDouble("position") * 1000))); break;
                         case "configure": service.configure(data); break;
                         case "sleep": service.sleep(data.optInt("minutes"), data.optBoolean("finish")); break;
-                        case "ui-save": app.save("ui", data); service.syncQueue(data); return "{}";
+                        case "ui-save": PreferenceRules.validateUi(data); app.save("ui", data); service.syncQueue(data); return "{}";
                         case "tools-save": app.save("tools", data); return "{}";
                         case "directories": directories(); break;
                         case "lyrics": app.lyricManager.handle(MainActivity.this, data); break;
                         case "network": NativeNetwork.handle(MainActivity.this, data); break;
+                        case "netease":
+                            if (data.optString("operation").equals("web-login")) {
+                                neteaseLoginRequest = data.optString("requestId");
+                                startActivityForResult(new Intent(MainActivity.this, NeteaseLoginActivity.class), NETEASE_LOGIN);
+                            } else NeteaseClient.get().handle(MainActivity.this, data);
+                            return "{}";
                         case "external-edit": externalEdit(data); break;
                         case "system-eq": {
                             Intent effects = new Intent(android.media.audiofx.AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)

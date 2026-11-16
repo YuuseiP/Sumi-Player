@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const babel = require("@babel/core");
 const { compileClassification } = require("./prepare-classification.cjs");
+const { compilePreferences } = require("./prepare-preferences.cjs");
 const root = path.resolve(__dirname, "ui");
 const output = path.join(__dirname, "app/src/main/assets/player");
 const version = fs.readFileSync(path.join(__dirname, "app/build.gradle"), "utf8").match(/versionName '([^']+)'/)[1];
@@ -10,6 +11,7 @@ const baselineFile = path.resolve(__dirname, "../artist-classification/semantic/
 const draftFile = path.join(root, ".classification-draft.json");
 const classification = compileClassification(fs.readFileSync(baselineFile), fs.existsSync(draftFile) ? JSON.parse(fs.readFileSync(draftFile, "utf8")) : null);
 fs.writeFileSync(path.join(output, "artist-classification.json"), JSON.stringify(classification));
+fs.writeFileSync(path.join(output, "preference-rules.json"), JSON.stringify(compilePreferences()));
 const polyfills = ["es.promise", "es.array.from", "es.array.find", "es.array.find-index", "es.array.includes", "es.array.flat", "es.array.flat-map",
   "es.array.iterator", "es.string.iterator", "es.object.assign", "es.object.entries", "es.object.values", "es.object.from-entries",
   "es.object.has-own", "es.string.pad-start", "es.string.pad-end", "es.string.match-all", "es.promise.all-settled", "es.global-this"];
@@ -34,8 +36,8 @@ prelude += "},cache={};function require(id){if(cache[id])return cache[id].export
 for (const feature of polyfills) prelude += `require(${ids.get(require.resolve("core-js/modules/" + feature))});`;
 prelude += "})();";
 fs.writeFileSync(path.join(output, "polyfills.js"), prelude);
-for (const name of ["appearance.js", "app.js", "avatar.js", "player-tools.js", "native-bridge.js", "native-tools.js"]) {
-  const filename = name.startsWith("native-") ? path.join(__dirname, name) : path.join(root, name);
+for (const name of ["appearance.js", "motion.js", "preferences.js", "library-navigation.js", "app.js", "avatar.js", "player-tools.js", "ambient.js", "native-bridge.js", "native-tools.js", "netease.js"]) {
+  const filename = name.startsWith("native-") || name === "netease.js" ? path.join(__dirname, name) : path.join(root, name);
   const result = babel.transformSync(fs.readFileSync(filename, "utf8"), {
     presets: [["@babel/preset-env", { targets: { chrome: "51" }, modules: false }]],
     comments: false, sourceType: "script", compact: false

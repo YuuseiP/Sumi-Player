@@ -10,9 +10,11 @@
   let entityById = new Map((library?.classification?.entities || []).map(entity => [entity.id, entity]));
   let libraryRevision = 0;
   const listRenderKeys = new WeakMap();
+  const listRenderStates = new WeakMap();
   const compareNames = new Intl.Collator("zh-Hans", { numeric: true }).compare;
   const listLimits = {};
   const listPageSize = window.M3X_NATIVE ? 40 : 150;
+  let listLoadFrame = 0;
   window.M3X_TRACKS = tracks;
   const root = document.getElementById("m3x-concept");
   const screen = root.querySelector(".m3x-screen");
@@ -38,7 +40,9 @@
     playlists: Array.isArray(saved.playlists) ? saved.playlists.filter(item => typeof item.id === "string" && typeof item.name === "string" && Array.isArray(item.trackIds)).map(item => ({ id: item.id, name: item.name.slice(0, 40), trackIds: [...new Set(item.trackIds.filter(id => typeof id === "string"))] })) : [],
     queue: Array.isArray(saved.queue) ? saved.queue.filter(id => typeof id === "string") : [],
     queueCleared: saved.queueCleared === true,
+    queueScope: saved.queueScope === "selection" ? "selection" : "library",
     hidden: new Set(Array.isArray(saved.hidden) ? saved.hidden.filter(id => typeof id === "string") : []),
+    preferences: window.M3X_PREFERENCES.normalize(saved.preferences),
     sort: ["original", "title", "artist", "album", "duration", "duration-desc", "added", "year"].includes(saved.sort) ? saved.sort : "original",
     groupSort: ["name", "name-desc", "count"].includes(saved.groupSort) ? saved.groupSort : "name",
     filenameTitle: saved.filenameTitle === true, showCovers: saved.showCovers !== false,
@@ -49,7 +53,7 @@
     colorMode: saved.colorMode === "cover" ? "cover" : "fixed",
     theme: ["system", "light", "dark"].includes(saved.theme) ? saved.theme : "system",
     startPage: ["library", "player", "profile"].includes(saved.startPage) ? saved.startPage : "library",
-    rememberPosition: saved.rememberPosition !== false,
+    rememberPosition: saved.rememberPosition !== false, reduceMotion: saved.reduceMotion === true,
     page: ["library", "player", "profile"].includes(saved.startPage) ? saved.startPage : "library",
     query: "", favoriteQuery: "", filter: "all", groupKey: null, playlistId: "", playlistTarget: "", sheetOpen: false, sheetTab: "signal"
   };
@@ -76,6 +80,7 @@
   audio.volume = 1;
   const paths = {
     library: '<path d="M4 4v16M9 4v16M14 4v16M18 4l3 16"/>',
+    cloud: '<path d="M7 18h10.5a3.5 3.5 0 0 0 .4-6.98A6 6 0 0 0 6.3 9.6 4.3 4.3 0 0 0 7 18Z"/>',
     disc: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/><circle cx="12" cy="12" r="8"/>',
@@ -114,7 +119,7 @@
     return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
   };
   const quality = track => track.bits && track.sampleRate ? `${track.bits}bit · ${track.sampleRate / 1000}kHz` : track.sampleRate ? `${track.sampleRate / 1000}kHz` : track.codec || "音频";
-  const format = track => (track.codec || "FLAC") + " · " + quality(track);
+  const format = track => track.neteaseId ? "网易云音乐 · 在线播放" : (track.codec || "FLAC") + " · " + quality(track);
   function text(key, value) {
     root.querySelectorAll(`[data-text="${key}"]`).forEach(element => {
       if (element.textContent !== String(value)) element.textContent = value;
@@ -135,12 +140,12 @@
       localStorage.setItem(storageKey, JSON.stringify({
         index: state.index, trackId: tracks[state.index]?.id, layout: state.layout, mode: state.mode,
         favorites: [...state.favorites], history: state.history, nickname: state.nickname,
-        playlists: state.playlists, avatar: state.avatar, queue: state.queue, queueCleared: state.queueCleared,
-        hidden: [...state.hidden], sort: state.sort, groupSort: state.groupSort, filenameTitle: state.filenameTitle, showCovers: state.showCovers,
-        theme: state.theme, libraryView: state.libraryView, visualTheme: state.visualTheme, colorMode: state.colorMode, startPage: state.startPage, rememberPosition: state.rememberPosition,
+        playlists: state.playlists, avatar: state.avatar, queue: state.queue, queueCleared: state.queueCleared, queueScope: state.queueScope,
+        hidden: [...state.hidden], preferences: state.preferences, sort: state.sort, groupSort: state.groupSort, filenameTitle: state.filenameTitle, showCovers: state.showCovers,
+        theme: state.theme, libraryView: state.libraryView, visualTheme: state.visualTheme, colorMode: state.colorMode, startPage: state.startPage, rememberPosition: state.rememberPosition, reduceMotion: state.reduceMotion,
         position: state.rememberPosition ? (audio.readyState ? audio.currentTime : pendingSeek) : 0
       }));
-      if (window.M3X_NATIVE) window.nativeCommand("ui-save", JSON.parse(localStorage.getItem(storageKey)));
+      if (window.M3X_NATIVE && window.nativeCommand("ui-save", JSON.parse(localStorage.getItem(storageKey))).error) return false;
       return true;
     } catch {
       if (reportError) toast("无法保存，请检查浏览器存储空间");
@@ -149,23 +154,39 @@
   }
   function queueIndices() {
     if (state.queueCleared) return [];
-    const indices = state.queue.map(id => indexById.get(id)).filter(index => index !== undefined && !state.hidden.has(tracks[index].id));
-    return state.queue.some(id => indexById.has(id)) ? indices : tracks.map((_, index) => index).filter(index => !state.hidden.has(tracks[index].id));
+    // "library" scope means the whole local catalog; online NetEase entries only play from their own lists.
+    const localLibrary = () => tracks.map((_, index) => index).filter(index => !tracks[index].neteaseId && playable(tracks[index]));
+    if (state.mode === 1 && state.queueScope === "library") return localLibrary();
+    const indices = state.queue.map(id => indexById.get(id)).filter(index => index !== undefined && playable(tracks[index]));
+    return state.queue.some(id => indexById.has(id)) ? indices : localLibrary();
+  }
+  const excluded = track => window.M3X_PREFERENCES.excludes(track, state.preferences);
+  const playable = track => !state.hidden.has(track.id) && !excluded(track);
+  const visible = track => !state.hidden.has(track.id) && (!state.preferences.hideInLibrary || !excluded(track));
+  function savePreferences(value) {
+    const previous = state.preferences;
+    state.preferences = window.M3X_PREFERENCES.normalize(value);
+    if (!persist(true)) { state.preferences = previous; persist(); render(); return false; }
+    resetLibraryLists(); render(); return true;
+  }
+  let preferencePlayIndex = null;
+  function confirmExcluded(index) {
+    preferencePlayIndex = index;
+    document.getElementById("preference-play-song").textContent = tracks[index].title + " · " + tracks[index].artist;
+    openDialog(document.getElementById("preference-play-dialog"));
   }
   const displayTitle = track => state.filenameTitle ? track.filename || track.title : track.title;
   const folderPath = track => (track.folder || "").replace(/\\/g, "/").replace(/^\.\/|\/$/g, "").replace(/^\.$/, "");
   const matchesQuery = (track, query) => !query.trim() || (track.title + " " + track.artist + " " + (track.originalArtist || "") + " " + track.album + " " + (track.filename || "") + " " + (track.folder || "")).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const favoriteIndices = () => sortedIndices(tracks.map((_, index) => index).filter(index =>
-    state.favorites.has(tracks[index].id) && !state.hidden.has(tracks[index].id) && matchesQuery(tracks[index], state.favoriteQuery)));
+    state.favorites.has(tracks[index].id) && !tracks[index].neteaseId && visible(tracks[index]) && matchesQuery(tracks[index], state.favoriteQuery)));
   function groupValues(track) {
     if (state.filter === "folders") {
       const prefix = state.groupKey ? state.groupKey + "/" : "";
       const child = folderPath(track).slice(prefix.length).split("/")[0];
       return child ? [prefix + child] : [];
     }
-    const kind = { characters: "character", groups: "group", artists: "artist" }[state.filter];
-    if (library?.classification && kind) return (track.credits || []).filter(item => item.kind === kind).map(item => item.id);
-    return [state.filter === "albums" ? track.album : state.filter === "artists" ? track.artist : track.folder || "."];
+    return window.M3X_LIBRARY_NAVIGATION.values(track, state.filter, Boolean(library?.classification));
   }
   const groupLabel = key => state.filter === "folders" ? (key || "").split("/").pop() :
     entityById.get(key)?.name || (key === "." ? "根目录" : key || "");
@@ -189,16 +210,53 @@
       const inGroup = state.filter === "folders" ?
         folderPath(track) === currentFolder || (includeSubfolders && (!currentFolder || folderPath(track).startsWith(currentFolder + "/"))) :
         state.groupKey === null || groupValues(track).includes(state.groupKey);
-      return !state.hidden.has(track.id) && inGroup && matchesQuery(track, query);
+      return !track.neteaseId && visible(track) && inGroup && matchesQuery(track, query);
     }));
   }
+  function resetLibraryLists() {
+    listLimits.library = listLimits.groups = listPageSize;
+    document.getElementById("library-browser").scrollTop = 0;
+  }
+  function moreButton(name, loaded, total) {
+    const more = document.createElement("button");
+    more.type = "button"; more.className = "m3x-text-button";
+    more.dataset.moreList = name;
+    more.textContent = "继续下滑加载（" + loaded + " / " + total + "）";
+    more.setAttribute("aria-label", "加载更多，已显示 " + loaded + " 首，共 " + total + " 首");
+    return more;
+  }
+  function loadMoreList(name) {
+    listLimits[name] = (listLimits[name] || listPageSize) + listPageSize;
+    if (name === "groups") renderGroups(); else renderLists();
+    scheduleListLoad();
+  }
+  function scheduleListLoad() {
+    if (listLoadFrame) return;
+    listLoadFrame = requestAnimationFrame(() => {
+      listLoadFrame = 0;
+      screen.querySelectorAll("[data-panel]:not([hidden]) [data-more-list]").forEach(more => {
+        if (!more.getClientRects().length || !screen.contains(more)) return;
+        const scroller = more.closest("#library-browser") || more.parentElement;
+        const viewport = scroller.getBoundingClientRect();
+        const marker = more.getBoundingClientRect();
+        if (scroller.clientHeight > 0 && marker.top <= viewport.bottom + Math.max(240, scroller.clientHeight * .75)
+            && marker.bottom >= viewport.top) loadMoreList(more.dataset.moreList);
+      });
+    });
+  }
+  // Capture scrolls from both the library browser and the independent queue/collection lists.
+  root.addEventListener("scroll", scheduleListLoad, true);
+  window.addEventListener("resize", scheduleListLoad);
   function renderGroups() {
     const grouping = ["albums", "artists", "characters", "groups", "folders"].includes(state.filter);
     const groups = document.getElementById("library-groups");
     const groupBack = document.getElementById("group-back");
     const folders = state.filter === "folders";
-    const grouped = new Map();
-    if (grouping && (folders || state.groupKey === null)) {
+    const renderKey = JSON.stringify([libraryRevision, state.preferences, state.filter, state.groupKey, state.query, state.groupSort, state.showCovers, state.libraryView, [...state.hidden]]);
+    const previous = listRenderStates.get(groups);
+    const reuseGroups = previous?.key === renderKey;
+    const grouped = reuseGroups ? previous.grouped : new Map();
+    if (!reuseGroups && grouping && (folders || state.groupKey === null)) {
       for (const index of libraryIndices(folders)) {
         for (const key of groupValues(tracks[index])) {
           if (!grouped.has(key)) grouped.set(key, []);
@@ -222,19 +280,20 @@
     if (!browsingGroups) {
       if (groups.firstChild) groups.replaceChildren();
       listRenderKeys.delete(groups);
+      listRenderStates.delete(groups);
       return;
     }
     const groupLimit = window.M3X_NATIVE ? listLimits.groups || listPageSize : Infinity;
-    const renderKey = JSON.stringify([libraryRevision, state.filter, state.groupKey, state.query, state.groupSort, state.showCovers, state.libraryView, [...state.hidden], groupLimit]);
-    if (listRenderKeys.get(groups) === renderKey) return;
-    listRenderKeys.set(groups, renderKey);
-    groups.replaceChildren();
-    const ordered = [...grouped].sort((a, b) => {
+    const appendOnly = previous?.key === renderKey && previous.limit <= groupLimit;
+    if (appendOnly && previous.limit === groupLimit) return;
+    const start = appendOnly ? previous.count : 0;
+    if (appendOnly) groups.querySelector("[data-more-list]")?.remove(); else groups.replaceChildren();
+    const ordered = reuseGroups ? previous.ordered : [...grouped].sort((a, b) => {
       const nameOrder = compareNames(groupLabel(a[0]), groupLabel(b[0]));
       if (state.groupSort === "count") return b[1].length - a[1].length || nameOrder;
       return state.groupSort === "name-desc" ? -nameOrder : nameOrder;
     });
-    for (const [key, indices] of ordered.slice(0, groupLimit)) {
+    for (const [key, indices] of ordered.slice(start, groupLimit)) {
       const button = document.createElement("button"); button.type = "button";
       button.className = "m3x-playlist-row"; button.dataset.group = key;
       const cover = document.createElement(folders ? "span" : "img");
@@ -254,12 +313,13 @@
       if (folders) button.insertAdjacentHTML("beforeend", icon("right"));
     }
     if (ordered.length > groupLimit) {
-      const more = document.createElement("button"); more.type = "button"; more.className = "m3x-text-button";
-      more.dataset.moreList = "groups"; more.textContent = "加载更多（" + groupLimit + " / " + ordered.length + "）"; groups.append(more);
+      groups.append(moreButton("groups", groupLimit, ordered.length));
     }
     if (!grouped.size) {
       const empty = document.createElement("p"); empty.className = "m3x-empty"; empty.textContent = "没有匹配的音乐"; groups.append(empty);
     }
+    listRenderStates.set(groups, { key: renderKey, limit: groupLimit, count: Math.min(groupLimit, ordered.length), grouped, ordered });
+    scheduleListLoad();
   }
   function renderProgress() {
     const duration = Number.isFinite(audio.duration) ? audio.duration : tracks[state.index]?.duration || 0;
@@ -276,6 +336,7 @@
       if (button.getAttribute("aria-label") !== label || !button.firstElementChild) {
         button.setAttribute("aria-label", label);
         button.innerHTML = icon(audio.paused ? "play" : "pause");
+        window.M3X_MOTION.icon(button);
       }
     });
     text("engine", audio.error ? "读取失败" : window.M3X_NATIVE ? "ExoPlayer · AudioTrack" : "浏览器音频");
@@ -289,18 +350,25 @@
       if (list.hidden) {
         if (list.firstChild) list.replaceChildren();
         listRenderKeys.delete(list);
+        listRenderStates.delete(list);
         return;
       }
       const nodes = [];
-      const indices = list.dataset.list === "recent" ? state.history.map(id => indexById.get(id)).filter(index => index !== undefined) :
+      const selection = list.dataset.list === "recent" ? state.history.map(id => indexById.get(id)).filter(index => index !== undefined) :
         list.dataset.list === "upcoming" ? [...queue.slice(queue.indexOf(state.index) + 1), ...queue.slice(0, Math.max(0, queue.indexOf(state.index)))] :
         list.dataset.list === "playlist" ? (state.playlists.find(item => item.id === state.playlistId)?.trackIds || []).map(id => indexById.get(id)).filter(index => index !== undefined) :
         list.dataset.list === "queue" ? queueIndices() : list.dataset.list === "favorites" ? favoriteIndices() : libraryIndices();
+      const indices = selection.filter(index => visible(tracks[index]));
       const limit = listLimits[list.dataset.list] || listPageSize;
-      const renderKey = JSON.stringify([libraryRevision, indices, limit, state.index, state.showCovers, state.filenameTitle, list.dataset.list === "library" ? state.libraryView : "list"]);
-      if (listRenderKeys.get(list) === renderKey) return;
-      listRenderKeys.set(list, renderKey);
-      indices.slice(0, limit).forEach(index => {
+      const renderKey = JSON.stringify([libraryRevision, state.preferences, indices, state.showCovers, state.filenameTitle, list.dataset.list === "library" ? state.libraryView : "list"]);
+      const previous = listRenderStates.get(list);
+      const appendOnly = previous?.key === renderKey && previous.limit <= limit;
+      if (appendOnly && previous.current !== state.index) {
+        list.querySelectorAll("[data-track]").forEach(button => button.setAttribute("aria-current", String(Number(button.dataset.track) === state.index)));
+      }
+      if (appendOnly && previous.limit === limit) { previous.current = state.index; return; }
+      const start = appendOnly ? previous.count : 0;
+      indices.slice(start, limit).forEach(index => {
         const track = tracks[index];
         if (state.hidden.has(track.id)) return;
         const button = document.createElement("button");
@@ -330,6 +398,7 @@
         artist.append(artistName);
         artist.title = track.artist;
         info.append(title, artist);
+        if (excluded(track)) { const badge = document.createElement("small"); badge.className = "m3x-preference-badge"; badge.textContent = "喜好已排除"; info.append(badge); }
         const details = document.createElement("span");
         details.className = "m3x-track-details";
         const resolution = document.createElement("small");
@@ -355,10 +424,9 @@
         } else nodes.push(button);
       });
       if (indices.length > limit) {
-        const more = document.createElement("button"); more.type = "button"; more.className = "m3x-text-button";
-        more.dataset.moreList = list.dataset.list; more.textContent = "加载更多（" + limit + " / " + indices.length + "）"; nodes.push(more);
+        nodes.push(moreButton(list.dataset.list, limit, indices.length));
       }
-      if (!nodes.length) {
+      if (!indices.length) {
         const empty = document.createElement("div");
         empty.className = "m3x-empty";
         empty.textContent = list.dataset.list === "recent" ? "暂无播放记录" : list.dataset.list === "playlist" ? "歌单暂无歌曲" :
@@ -369,14 +437,17 @@
         }
         nodes.push(empty);
       }
-      list.replaceChildren(...nodes);
+      if (appendOnly) { list.querySelector("[data-more-list]")?.remove(); list.append(...nodes); }
+      else list.replaceChildren(...nodes);
+      listRenderStates.set(list, { key: renderKey, limit, count: Math.min(limit, indices.length), current: state.index });
     });
+    scheduleListLoad();
   }
   function renderProfile() {
     if (document.activeElement !== nickname) nickname.value = state.nickname;
     text("favoriteCount", tracks.filter(track => state.favorites.has(track.id) && !state.hidden.has(track.id)).length);
     text("historyCount", state.history.filter(id => indexById.has(id)).length + " 首");
-    text("songCount", tracks.length);
+    text("songCount", tracks.filter(track => !track.neteaseId).length);
     text("playlistTotal", state.playlists.length);
     text("hiddenCount", state.hidden.size + " 首");
     if (state.page === "profile") renderCollectionPreviews();
@@ -425,13 +496,15 @@
     const track = tracks[state.index];
     const queue = queueIndices();
     window.M3X_APPEARANCE.apply(state, track);
+    window.M3X_MOTION.configure(state.reduceMotion);
     screen.dataset.libraryView = state.libraryView;
     screen.querySelectorAll("[data-library-view]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.libraryView === state.libraryView)));
     screen.querySelector('[data-setting="colorMode"]').disabled = state.visualTheme === "endfield";
     screen.dataset.layout = state.layout;
     screen.querySelectorAll("[data-panel]").forEach(panel => { panel.hidden = panel.dataset.panel !== state.page; });
     screen.querySelectorAll(".m3x-nav [data-page]").forEach(button => {
-      const section = ["settings", "statistics", "favorites", "playlists", "playlist"].includes(state.page) ? "profile" : ["queue", "lyrics"].includes(state.page) ? "player" : state.page === "create-library" ? "library" : state.page;
+      let section = ["settings", "statistics", "favorites", "playlists", "playlist"].includes(state.page) ? "profile" : ["queue", "lyrics"].includes(state.page) ? "player" : state.page === "create-library" ? "library" : state.page === "netease-list" ? (window.M3X_SOURCE?.listSection?.() || "netease") : state.page;
+      if (screen.dataset.source === "netease") section = { profile: "netease-me", library: "netease" }[section] || section;
       if (button.dataset.page === section) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
@@ -439,19 +512,21 @@
     text("title", track ? displayTitle(track) : "暂无歌曲");
     text("singer", track?.artist || "");
     text("album", track?.album || "");
+    for (const type of ["album", "artist"]) screen.querySelector('[data-action="open-song-' + type + '"]').disabled = !songDestinations(track, type).length;
     text("format", track ? format(track) : "");
     text("next", tracks.length ? state.mode === 1 ? "随机选择下一首" : tracks[nextIndex()]?.title || "队列播放完毕" : "暂无歌曲");
-    text("trackCount", tracks.length + " 首");
+    const localTracks = tracks.filter(track => !track.neteaseId), visibleCount = localTracks.filter(visible).length;
+    text("trackCount", visibleCount + " 首" + (visibleCount < localTracks.length ? " · 已隐藏 " + (localTracks.length - visibleCount) + " 首" : ""));
     text("queueCount", queue.length + " 首歌曲");
     const playlist = state.playlists.find(item => item.id === state.playlistId);
     text("playlistName", playlist?.name || "歌单");
     text("playlistCount", (playlist?.trackIds.filter(id => indexById.has(id)).length || 0) + " 首");
     const cover = screen.querySelector(".m3x-cover");
     const coverSource = track?.cover || "cover-placeholder.svg";
-    if (cover.getAttribute("src") !== coverSource) cover.src = coverSource;
+    window.M3X_MOTION.cover(cover, coverSource);
     cover.alt = track ? track.album + " 专辑封面" : "";
     const miniCover = screen.querySelector(".m3x-mini-cover");
-    if (miniCover.getAttribute("src") !== coverSource) miniCover.src = coverSource;
+    window.M3X_MOTION.cover(miniCover, coverSource);
     screen.querySelector(".m3x-title").title = track?.title || "";
     screen.querySelector(".m3x-artist").title = track?.artist || "";
     const favorite = screen.querySelector('[data-action="favorite"]');
@@ -477,6 +552,7 @@
     renderPlaylists();
     renderPlayback();
     positionDialogs();
+    window.M3X_MOTION.render(state, track);
     window.dispatchEvent(new CustomEvent("m3x-render", { detail: { page: state.page } }));
     if (renderedTrack !== track?.id) {
       renderedTrack = track?.id;
@@ -530,7 +606,7 @@
     clearTimeout(closingDialogs.get(element));
     element.classList.remove("is-open");
     if (!element.open) return;
-    if (instant || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (instant || window.M3X_MOTION.reduced()) {
       element.classList.remove("is-closing"); element.close(); return;
     }
     element.classList.add("is-closing");
@@ -556,6 +632,44 @@
   }
   function openLibrary(filter) {
     state.filter = filter; state.groupKey = null; state.query = ""; search.value = ""; state.page = "library";
+    resetLibraryLists();
+  }
+  const libraryReturns = [];
+  let relatedDestinations = [];
+  const songDestinations = (track, type) => window.M3X_LIBRARY_NAVIGATION.destinations(track, type, Boolean(library?.classification));
+  function openSongDestination(destination) {
+    libraryReturns.push({ page: state.page, filter: state.filter, groupKey: state.groupKey, query: state.query,
+      scroll: document.getElementById("library-browser").scrollTop, limits: { ...listLimits } });
+    openLibrary(destination.filter);
+    state.groupKey = destination.key;
+    render();
+    announce("已打开" + destination.label + "：" + destination.name);
+  }
+  function returnFromSongDestination() {
+    const previous = libraryReturns.pop();
+    if (!previous) return false;
+    Object.assign(state, { page: previous.page, filter: previous.filter, groupKey: previous.groupKey, query: previous.query });
+    search.value = state.query;
+    Object.assign(listLimits, previous.limits);
+    render();
+    document.getElementById("library-browser").scrollTop = previous.scroll;
+    return true;
+  }
+  function openSongRelated(track, type) {
+    const destinations = songDestinations(track, type);
+    if (!destinations.length) { toast(type === "album" ? "这首歌曲没有专辑信息" : "这首歌曲没有歌手信息"); return; }
+    if (destinations.length === 1) { openSongDestination(destinations[0]); return; }
+    relatedDestinations = destinations;
+    const choices = document.getElementById("song-artist-choices");
+    choices.replaceChildren();
+    for (const [index, destination] of destinations.entries()) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "m3x-sheet-action";
+      button.dataset.songArtist = index;
+      const name = document.createElement("span"), label = document.createElement("small");
+      name.textContent = destination.name; label.textContent = destination.label;
+      button.append(name, label); choices.append(button);
+    }
+    openDialog(document.getElementById("song-artist-dialog"));
   }
   async function api(path, body) {
     const response = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
@@ -569,6 +683,8 @@
     document.getElementById("song-menu-title").textContent = displayTitle(tracks[index]);
     document.getElementById("song-menu-artist").textContent = tracks[index].artist;
     document.getElementById("song-menu-dialog").dataset.trackId = tracks[index].id;
+    document.getElementById("menu-preference").textContent = excluded(tracks[index]) ? "听歌喜好：始终保留" : "听歌喜好：单独排除";
+    for (const type of ["album", "artist"]) document.querySelector('[data-action="menu-open-' + type + '"]').disabled = !songDestinations(tracks[index], type).length;
     openDialog(document.getElementById("song-menu-dialog"));
   }
   function renderHidden() {
@@ -606,11 +722,13 @@
   function playNext(index) {
     const track = tracks[index], current = tracks[state.index];
     if (!track || !current) return;
+    if (excluded(track)) { toast("歌曲已被听歌喜好排除，请先设为始终保留"); return; }
     if (track.id === current.id) { toast("正在播放这首歌曲"); return; }
     const queue = queueIndices().map(item => tracks[item].id).filter(id => id !== track.id);
     if (!queue.includes(current.id)) queue.unshift(current.id);
     queue.splice(queue.indexOf(current.id) + 1, 0, track.id);
     state.queue = queue; state.queueCleared = false;
+    state.queueScope = "selection";
     render(); persist(true); toast("已设为下一首");
   }
   function removeQueue(id) {
@@ -618,6 +736,7 @@
     const position = before.findIndex(index => tracks[index].id === id);
     const wasPlaying = !audio.paused;
     state.queue = before.map(index => tracks[index].id).filter(item => item !== id);
+    state.queueScope = "selection";
     state.queueCleared = !state.queue.length;
     if (tracks[state.index]?.id === id) {
       if (state.queue.length) loadTrack(tracks.findIndex(track => track.id === state.queue[position % state.queue.length]), wasPlaying, false);
@@ -697,7 +816,7 @@
     indexById = new Map(tracks.map((track, index) => [track.id, index]));
     entityById = new Map((data.classification?.entities || []).map(entity => [entity.id, entity]));
     const nativeId = window.M3X_NATIVE ? window.nativeCommand("poll").id : null;
-    if (window.M3X_NATIVE) state.queue = window.nativeCommand("queue").ids || state.queue;
+    if (window.M3X_NATIVE) state.queue = window.nativeCommand("queue").sourceIds || state.queue;
     state.index = Math.max(0, tracks.findIndex(track => track.id === (nativeId || previous?.id)));
     if (!window.M3X_NATIVE && tracks[state.index]?.src !== previousSource) {
       audio.pause();
@@ -758,6 +877,7 @@
   }
   async function play() {
     if (!tracks.length) return;
+    if (excluded(tracks[state.index]) && !(window.M3X_NATIVE && window.nativeCommand("poll").preferenceContinuation)) { confirmExcluded(state.index); return; }
     if (state.queueCleared) { state.queue = [tracks[state.index].id]; state.queueCleared = false; render(); }
     const index = state.index;
     try {
@@ -773,6 +893,7 @@
   }
   function loadTrack(index, autoplay, manual = true) {
     if (!tracks[index]) return;
+    if (manual && excluded(tracks[index])) { confirmExcluded(index); return; }
     if (manual) window.dispatchEvent(new Event("m3x-manual-track"));
     state.index = index;
     pendingSeek = 0;
@@ -794,6 +915,13 @@
     const queue = queueIndices();
     const current = queue.indexOf(state.index);
     return queue[((current < 0 ? queue.length : current) + queue.length - 1) % queue.length];
+  }
+  function stepTrack(previous = false) {
+    if (!queueIndices().length) return;
+    if (window.M3X_NATIVE) {
+      window.dispatchEvent(new Event("m3x-manual-track"));
+      audio.skip(previous);
+    } else loadTrack(previous ? previousIndex() : nextIndex(), true);
   }
   function positionDialogs() {
     const opened = screen.querySelectorAll("dialog[open]");
@@ -817,10 +945,24 @@
     if (!button) return;
     const action = button.dataset.action;
     if (button.type === "submit") return;
+    if (button.dataset.page || button.dataset.filter || button.dataset.group !== undefined || action === "open-library") libraryReturns.length = 0;
     if (button.hasAttribute("data-close")) {
       closeDialog(button.closest("dialog")); return;
+    } else if (button.dataset.songArtist !== undefined) {
+      const destination = relatedDestinations[Number(button.dataset.songArtist)];
+      closeDialog(document.getElementById("song-artist-dialog"), true);
+      if (destination) openSongDestination(destination);
+      return;
+    } else if (action === "ambient-mode") {
+      window.M3X_AMBIENT?.enter(); return;
+    } else if (["open-song-album", "open-song-artist", "menu-open-album", "menu-open-artist"].includes(action)) {
+      const fromMenu = action.startsWith("menu-");
+      const track = fromMenu ? tracks[indexById.get(document.getElementById("song-menu-dialog").dataset.trackId)] : tracks[state.index];
+      if (fromMenu) closeDialog(document.getElementById("song-menu-dialog"), true);
+      openSongRelated(track, action.endsWith("album") ? "album" : "artist");
+      return;
     } else if (button.dataset.moreList) {
-      listLimits[button.dataset.moreList] = (listLimits[button.dataset.moreList] || listPageSize) + listPageSize;
+      loadMoreList(button.dataset.moreList); return;
     } else if (button.dataset.menuTrack !== undefined) {
       openSongMenu(Number(button.dataset.menuTrack)); return;
     } else if (button.dataset.removeQueue) {
@@ -829,7 +971,7 @@
       state.hidden.delete(button.dataset.restore); renderHidden();
     } else if (button.dataset.group !== undefined) {
       state.groupKey = button.dataset.group;
-      document.getElementById("library-browser").scrollTop = 0;
+      resetLibraryLists();
     } else if (button.dataset.folder) {
       void browseFolder(button.dataset.folder); return;
     } else if (button.dataset.removeRoot !== undefined) {
@@ -857,6 +999,9 @@
       state.page = button.dataset.page;
     } else if (button.dataset.track !== undefined) {
       if (!["queue", "upcoming"].includes(button.dataset.context)) {
+        // The tapped list (album, artist, folder, search, playlist…) is the play and shuffle range.
+        // Only the unfiltered "all songs" list follows the live local catalog.
+        state.queueScope = button.dataset.context === "library" && state.filter === "all" && state.groupKey === null && !state.query.trim() ? "library" : "selection";
         state.queue = button.dataset.context === "library" ? libraryIndices().map(index => tracks[index].id) :
           button.dataset.context === "favorites" ? favoriteIndices().map(index => tracks[index].id) :
           button.dataset.context === "playlist" ? (state.playlists.find(item => item.id === state.playlistId)?.trackIds || []).filter(id => indexById.has(id) && !state.hidden.has(id)) :
@@ -869,11 +1014,18 @@
     } else if (button.dataset.filter) {
       state.filter = button.dataset.filter;
       state.groupKey = null;
+      resetLibraryLists();
     } else if (action === "group-back") {
+      if (returnFromSongDestination()) return;
       state.groupKey = state.filter === "folders" ? state.groupKey?.split("/").slice(0, -1).join("/") || null : null;
-      document.getElementById("library-browser").scrollTop = 0;
+      resetLibraryLists();
     } else if (action === "song-menu") {
       openSongMenu(state.index); return;
+    } else if (action === "preference-song") {
+      closeDialog(document.getElementById("song-menu-dialog"), true);
+      const track = tracks[menuIndex];
+      if (savePreferences(window.M3X_PREFERENCES.override(state.preferences, track.id, excluded(track) ? "keep" : "exclude"))) toast("已保存听歌喜好");
+      return;
     } else if (action === "song-info" || action === "play-next" || action === "menu-add-playlist" || action === "hide-song") {
       closeDialog(document.getElementById("song-menu-dialog"), true);
       if (action === "song-info") { void showSongInfo(menuIndex); return; }
@@ -886,7 +1038,7 @@
     } else if (action === "restore-all") {
       state.hidden.clear(); renderHidden();
     } else if (action === "clear-queue") {
-      state.queue = []; state.queueCleared = true; audio.pause(); toast("队列已清空");
+      state.queue = []; state.queueCleared = true; state.queueScope = "selection"; audio.pause(); toast("队列已清空");
     } else if (action === "locate-current") {
       const position = queueIndices().indexOf(state.index);
       if (position < 0) { toast("当前歌曲不在队列中"); return; }
@@ -922,10 +1074,12 @@
     } else if (action === "new-playlist" || action === "add-playlist" || action === "rename-playlist") {
       openPlaylist(action === "add-playlist" ? "add" : action === "rename-playlist" ? "rename" : "create"); return;
     } else if (action === "play-playlist") {
-      state.queue = (state.playlists.find(item => item.id === state.playlistId)?.trackIds || []).filter(id => indexById.has(id) && !state.hidden.has(id));
-      if (!state.queue.length) { toast("歌单暂无歌曲"); return; }
+      const source = (state.playlists.find(item => item.id === state.playlistId)?.trackIds || []).filter(id => indexById.has(id) && !state.hidden.has(id));
+      const first = source.find(id => playable(tracks[indexById.get(id)]));
+      if (!first) { toast(source.length ? "歌单内歌曲均被听歌喜好排除" : "歌单暂无歌曲"); return; }
+      state.queue = source; state.queueScope = "selection";
       state.queueCleared = false;
-      state.page = "player"; loadTrack(tracks.findIndex(track => track.id === state.queue[0]), true); return;
+      state.page = "player"; loadTrack(indexById.get(first), true); return;
     } else if (action === "scan") {
       void scanLibrary(); return;
     } else if (action === "choose-folder") {
@@ -934,13 +1088,14 @@
       if (audio.paused) void play(); else audio.pause();
       return;
     } else if (["next", "previous"].includes(action)) {
-      loadTrack(action === "next" ? nextIndex() : previousIndex(), true);
+      stepTrack(action === "previous");
       return;
     } else if (action === "favorite") {
       const id = tracks[state.index].id;
       if (state.favorites.has(id)) state.favorites.delete(id); else state.favorites.add(id);
       announce(state.favorites.has(id) ? "已收藏" : "已取消收藏");
     } else if (action === "mode") {
+      // Switching to shuffle keeps the current queue (album, artist, NetEase list…) as the range.
       state.mode = (state.mode + 1) % modes.length;
       toast(modes[state.mode]);
     } else if (action === "output") {
@@ -967,6 +1122,7 @@
   });
   search.addEventListener("input", () => {
     state.query = search.value;
+    resetLibraryLists();
     renderGroups();
     renderLists();
     announce("找到 " + screen.querySelectorAll('[data-list="library"] [data-track]').length + " 首歌曲");
@@ -1045,6 +1201,7 @@
   });
   screen.querySelectorAll("[data-setting]").forEach(input => input.addEventListener("change", () => {
     state[input.dataset.setting] = input.type === "checkbox" ? input.checked : input.value;
+    if (["sort", "groupSort"].includes(input.dataset.setting)) resetLibraryLists();
     render();
     persist(true);
     announce("设置已保存");
@@ -1093,7 +1250,7 @@
     event.preventDefault(); state.sheetOpen = false; syncSheet(true);
   });
   dialog.addEventListener("close", () => { state.sheetOpen = false; syncSheet(true); });
-  screen.querySelector(".m3x-sheet-tabs").addEventListener("keydown", event => {
+  screen.querySelector("#output-dialog .m3x-sheet-tabs").addEventListener("keydown", event => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     state.sheetTab = event.key === "Home" ? "signal" : event.key === "End" ? "processing" : state.sheetTab === "signal" ? "processing" : "signal";
@@ -1114,7 +1271,7 @@
   window.addEventListener("m3x-native-track", event => {
     const index = tracks.findIndex(track => track.id === event.detail);
     if (index < 0 || index === state.index) return;
-    state.queue = window.nativeCommand("queue").ids || state.queue;
+    state.queue = window.nativeCommand("queue").sourceIds || state.queue;
     state.queueCleared = false;
     state.index = index; pendingSeek = 0;
     state.history = [event.detail, ...state.history.filter(id => id !== event.detail)].slice(0, 20);
@@ -1124,6 +1281,16 @@
   new ResizeObserver(positionDialogs).observe(screen);
   window.addEventListener("pagehide", () => persist());
   if (tracks[state.index]) audio.src = tracks[state.index].src;
+  window.M3X_PREFERENCES.mount({ root, getSettings: () => state.preferences, getLibrary: () => library,
+    commit: savePreferences, openDialog });
+  for (const mode of ["once", "keep"]) document.getElementById("preference-play-" + mode).addEventListener("click", () => {
+    const index = preferencePlayIndex;
+    if (!tracks[index]) return;
+    if (mode === "keep") { if (!savePreferences(window.M3X_PREFERENCES.override(state.preferences, tracks[index].id, "keep"))) return; }
+    else if (window.M3X_NATIVE && window.nativeCommand("allow-track-once", { id: tracks[index].id }).error) return;
+    closeDialog(document.getElementById("preference-play-dialog"), true);
+    state.page = "player"; loadTrack(index, true, false);
+  });
   render();
   screen.querySelectorAll(".m3x-browser-only").forEach(element => { element.hidden = Boolean(window.M3X_NATIVE); });
   renderScan();
@@ -1131,10 +1298,15 @@
   window.M3X_UI = {
     toast, openDialog, closeDialog,
     back() {
+      if (window.M3X_AMBIENT?.exit()) return true;
+      const sourceBack = window.M3X_SOURCE?.back?.(state.page);
+      if (sourceBack === "exit") return false;
+      if (sourceBack) return true;
       if (state.page === "library") {
+        if (returnFromSongDestination()) return true;
         if (state.groupKey === null) return false;
         state.groupKey = state.filter === "folders" ? state.groupKey?.split("/").slice(0, -1).join("/") || null : null;
-        document.getElementById("library-browser").scrollTop = 0;
+        resetLibraryLists();
       } else {
         state.page = { playlist: "playlists", favorites: "profile", playlists: "profile", settings: "profile",
           statistics: "profile", queue: "player", lyrics: "player" }[state.page] || "library";
@@ -1142,8 +1314,8 @@
       render(); return true;
     },
     currentTrack: () => tracks[state.index], tracks, library: () => library,
-    play, next: () => loadTrack(nextIndex(), true),
-    previous: () => loadTrack(previousIndex(), true),
+    play, next: () => stepTrack(),
+    previous: () => stepTrack(true),
     previewLibrary(data, showLibrary = false) {
       if (showLibrary || !tracks[0]?.classificationPreview) {
         state.filter = "all"; state.groupKey = null; state.query = ""; search.value = "";
@@ -1161,6 +1333,50 @@
       render();
     },
     showTrack: id => { const index = tracks.findIndex(track => track.id === id); if (index >= 0) { state.page = "player"; loadTrack(index, true); } },
+    reloadLibrary: () => api("/api/library").then(data => { library = data; applyLibrary(data); renderScan(); return data; }),
+    // Plays an explicit list of library ids (e.g. a NetEase playlist) as the queue, starting from startId.
+    playIds(ids, startId) {
+      const source = ids.filter(id => indexById.has(id));
+      const first = source.includes(startId) ? startId : source[0];
+      if (!first) { toast("歌曲尚未加入曲库"); return false; }
+      state.queue = source; state.queueScope = "selection"; state.queueCleared = false;
+      state.page = "player"; loadTrack(indexById.get(first), true, false); persist(true); return true;
+    },
+    page: () => state.page,
+    go(page) { state.page = page; render(); },
+    // Appends library ids to the explicit queue without changing the current song (endless FM / heartbeat).
+    appendIds(ids) {
+      const extra = ids.filter(id => indexById.has(id) && !state.queue.includes(id));
+      if (!extra.length) return;
+      state.queue = queueIndices().map(index => tracks[index].id).concat(extra); state.queueScope = "selection"; state.queueCleared = false;
+      render(); persist(true);
+    },
+    queueIds: () => queueIndices().map(index => tracks[index].id),
+    // Merges tracks imported by the native side without re-reading the whole library.
+    addTracks(list) {
+      for (const track of list) {
+        const at = indexById.get(track.id);
+        if (at === undefined) { indexById.set(track.id, tracks.length); tracks.push(track); } else tracks[at] = track;
+      }
+      if (list.length) libraryRevision++;
+    },
+    // Drops rendered rows/covers of the local library while the other source is in use; they rebuild on return.
+    releaseLists() {
+      root.querySelectorAll('[data-panel="library"] [data-list], [data-panel="favorites"] [data-list], [data-panel="playlist"] [data-list], #library-groups').forEach(list => {
+        list.replaceChildren(); listRenderStates.delete(list); listRenderKeys.delete(list);
+      });
+    },
+    // Keeps the current song playing and replaces everything after it (heartbeat mode).
+    replaceUpcoming(ids) {
+      const current = tracks[state.index]?.id;
+      if (!current) return;
+      state.queue = [current, ...ids.filter(id => indexById.has(id) && id !== current)];
+      state.queueScope = "selection"; state.queueCleared = false;
+      render(); persist(true);
+    },
+    playMode: () => state.mode,
+    isPaused: () => audio.paused,
+    setMode(value) { state.mode = value; render(); persist(true); },
     saveAvatar(data) {
       const previous = state.avatar; state.avatar = data;
       if (!persist(true)) { state.avatar = previous; return false; }

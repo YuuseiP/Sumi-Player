@@ -44,6 +44,29 @@ public class ArtistClassificationTest {
         }
     }
 
+    @Test public void savedClassificationRelinksToSharedEntitiesWithoutReclassifying() throws Exception {
+        JSONObject config = config();
+        ArtistClassification classifier = new ArtistClassification(config);
+        JSONObject known = config.getJSONArray("tracks").getJSONObject(0);
+        JSONObject classified = classifier.apply(track(known), "primary:Music/THE_IDOLMASTER/" + known.getString("path"));
+        JSONObject raw = classifier.apply(track(known).put("artist", "Someone Unlisted"), "/storage/1234/Other/song.flac");
+        // Simulate library.json round-trip: credits become per-track copies.
+        JSONObject restored = new JSONObject(classified.toString()), restoredRaw = new JSONObject(raw.toString());
+        assertTrue(classifier.relink(restored));
+        assertTrue(classifier.relink(restoredRaw));
+        assertEquals(classified.toString(), restored.toString());
+        assertSame(classified.getJSONArray("credits").get(0), restored.getJSONArray("credits").get(0));
+        assertSame(raw.getJSONArray("credits").get(0), restoredRaw.getJSONArray("credits").get(0));
+        JSONObject second = new JSONObject(classified.toString());
+        classifier.relink(second);
+        assertSame(restored.getJSONArray("credits").get(0), second.getJSONArray("credits").get(0));
+        // Never-classified tracks and entities that no longer exist force the full classification path.
+        assertFalse(classifier.relink(track(known)));
+        JSONObject stale = new JSONObject(classified.toString());
+        stale.getJSONArray("credits").put(0, new JSONObject().put("id", "character-removed").put("kind", "character").put("name", "x"));
+        assertFalse(classifier.relink(stale));
+    }
+
     @Test public void exactTagFallbackIsScopedAndNeverSplitsUnknownCredits() throws Exception {
         JSONObject config = config();
         ArtistClassification classifier = new ArtistClassification(config);
