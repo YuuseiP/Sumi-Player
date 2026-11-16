@@ -59,8 +59,12 @@
         cancelScroll();
         list.replaceChildren();
         if (matches) Array.from(source.children).forEach(node => {
-          const line = document.createElement("p"); line.textContent = node.textContent;
-          if (node.tagName !== "BUTTON") line.className = "ambient-plain";
+          const line = document.createElement("p");
+          if (node.tagName !== "BUTTON") { line.className = "ambient-plain"; line.textContent = node.textContent; }
+          else Array.from(node.children).forEach(part => {
+            const span = document.createElement("span"); span.className = part.className; span.textContent = part.textContent; line.append(span);
+          });
+          if (node.tagName === "BUTTON" && !node.children.length) line.textContent = node.textContent;
           list.append(line);
         });
         else { const line = document.createElement("p"); line.className = "ambient-plain"; line.textContent = track ? "正在读取歌词…" : "暂无播放歌曲"; list.append(line); }

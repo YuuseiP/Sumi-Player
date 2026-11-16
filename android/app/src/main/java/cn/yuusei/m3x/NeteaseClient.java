@@ -292,12 +292,6 @@ final class NeteaseClient {
             if (rows != null) for (int i = 0; i < rows.length(); i++) recommended.put(list(rows.getJSONObject(i), "picUrl"));
         }
         result.put("playlists", recommended);
-        JSONArray tops = new JSONArray();
-        try {
-            JSONArray rows = weapi("/toplist", new JSONObject()).optJSONArray("list");
-            if (rows != null) for (int i = 0; i < rows.length() && tops.length() < 8; i++) tops.put(list(rows.getJSONObject(i), "coverImgUrl"));
-        } catch (Exception error) { android.util.Log.w("M3X.Netease", "toplist", error); }
-        result.put("toplists", tops);
         JSONArray hot = new JSONArray();
         try {
             JSONObject data = weapi("/search/hot", json("type", 1111)).optJSONObject("result");
@@ -305,6 +299,36 @@ final class NeteaseClient {
             if (rows != null) for (int i = 0; i < rows.length() && hot.length() < 10; i++) hot.put(rows.getJSONObject(i).optString("first"));
         } catch (Exception error) { android.util.Log.w("M3X.Netease", "hot search", error); }
         return result.put("hot", hot);
+    }
+    /** Pull-to-refresh: a fresh batch of nine playlists the discover page has not shown yet. */
+    private JSONObject morePlaylists(int batch, JSONArray exclude) throws Exception {
+        Set<String> seen = new HashSet<>();
+        if (exclude != null) for (int i = 0; i < exclude.length() && i < 600; i++) seen.add(exclude.optString(i));
+        JSONArray out = new JSONArray();
+        Exception failure = null;
+        // Personalized recommendations are re-drawn on every call; logged-in requests follow the account's taste.
+        try { addFresh(weapi("/personalized/playlist", json("limit", 30, "total", true, "n", 1000)).optJSONArray("result"), "picUrl", seen, out); }
+        catch (Exception error) { failure = error; android.util.Log.w("M3X.Netease", "personalized playlists", error); }
+        // Once that pool is exhausted, page through the hot playlist square (cycling within its first 600).
+        for (int page = 0; out.length() < 9 && page < 3; page++) {
+            int offset = ((Math.max(1, batch) - 1) * 3 + page) * 30 % 600;
+            try { addFresh(weapi("/playlist/list", json("cat", "全部", "order", "hot", "offset", offset, "limit", 30, "total", true)).optJSONArray("playlists"), "coverImgUrl", seen, out); }
+            catch (Exception error) { failure = error; android.util.Log.w("M3X.Netease", "hot playlists", error); break; }
+        }
+        if (out.length() == 0) throw failure instanceof IOException ? (IOException) failure : new IOException("没有更多歌单，请稍后再试");
+        return json("playlists", out);
+    }
+    private void addFresh(JSONArray rows, String coverKey, Set<String> seen, JSONArray out) throws Exception {
+        if (rows == null) return;
+        for (int i = 0; i < rows.length() && out.length() < 9; i++) {
+            JSONObject item = list(rows.getJSONObject(i), coverKey);
+            if (seen.add(item.getString("id"))) out.put(item);
+        }
+    }
+    /** Lyrics with the account cookie: some releases return an empty lyric to anonymous requests. */
+    JSONObject lyric(String id) throws Exception {
+        if (!id.matches("[0-9]{1,20}")) throw new IOException("歌曲来源编号无效");
+        return eapi("/api/song/lyric/v1", json("id", id, "cp", false, "tv", 0, "lv", 0, "rv", 0, "kv", 0, "yv", 0, "ytv", 0, "yrv", 0));
     }
     private JSONObject userPlaylists() throws Exception {
         String user = requireUid();
@@ -557,6 +581,7 @@ final class NeteaseClient {
                     }
                     case "search": result = search(input.optString("query"), input.optInt("offset"), input.optInt("type", 1)); break;
                     case "home": result = home(); break;
+                    case "more-playlists": result = morePlaylists(input.optInt("batch", 1), input.optJSONArray("exclude")); break;
                     case "playlists": result = userPlaylists(); break;
                     case "playlist": result = playlist(input.optString("id")); break;
                     case "daily": result = daily(); break;

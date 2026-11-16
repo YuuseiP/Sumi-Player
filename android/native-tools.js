@@ -215,6 +215,8 @@
       const query = document.createElement("input"); query.type = "search"; query.maxLength = 250; query.setAttribute("aria-label", "歌词搜索词");
       query.value = (track.title + " " + (track.originalArtist || track.artist || "")).slice(0, 250);
       const provider = document.createElement("select"); provider.setAttribute("aria-label", "歌词来源"); provider.append(new Option("QQ 音乐", "QQ"), new Option("网易云音乐", "NE"));
+      // A song played from the NetEase tab has its lyrics on NetEase under the same song id.
+      if (track.neteaseId) provider.value = "NE";
       const status = document.createElement("p"); status.className = "m3x-caption"; status.setAttribute("role", "status");
       const results = document.createElement("div"), editor = document.createElement("section"), preview = document.createElement("div");
       results.className = "m3x-lyric-results";
@@ -245,19 +247,72 @@
         }
         finally { lock(false); }
       }
+      // Some releases on both platforms carry no lyrics at all (empty, or only credit lines), so after a
+      // search every candidate is fetched once in the background and marked before the user picks one.
+      const probed = new Map(); let userStatus = false, autoPick = "";
+      const hasSynced = text => M3X_TOOLS.parseLrc(text || "").lines.some(line => line.text);
+      const missing = error => /没有|纯音乐/.test(error?.message || "");
+      function mark(node, entry) {
+        node.querySelector(".m3x-lyric-probe")?.remove();
+        const tag = document.createElement("small"); tag.className = "m3x-lyric-probe";
+        if (entry.error) { tag.textContent = "无同步歌词"; node.dataset.lyrics = "none"; }
+        else { tag.textContent = hasSynced(entry.data.document.translation) ? "同步原文＋译文" : "同步原文 · 无译文"; node.dataset.lyrics = "synced"; }
+        node.append(tag);
+      }
+      async function probe(rows, nodes, seq) {
+        let usable = 0, checked = 0;
+        const summary = () => { if (userStatus) return; status.textContent = "找到 " + rows.length + " 个候选，" + (checked < rows.length ? "正在检查歌词（" + checked + " / " + rows.length + "）…" : usable + " 个含同步原文") + "；点击预览，不会自动采用"; };
+        summary();
+        for (let i = 0; i < rows.length; i++) {
+          // A candidate the user opened goes first; probing waits while a panel action runs.
+          while (busy && seq === sequence && dialog.open) await new Promise(resolve => setTimeout(resolve, 250));
+          if (seq !== sequence || !dialog.open) return;
+          let entry = probed.get(rows[i].token);
+          if (!entry) {
+            try { entry = { data: await request("fetch", { token: rows[i].token }) }; }
+            catch (error) {
+              if (seq !== sequence || !dialog.open) return;
+              if (!missing(error)) { if (!userStatus) status.textContent = "找到 " + rows.length + " 个候选；歌词检查中断（" + error.message + "），可直接点击预览"; return; }
+              entry = { error };
+            }
+            probed.set(rows[i].token, entry);
+          }
+          if (seq !== sequence || !dialog.open) return;
+          mark(nodes[i], entry); checked++; if (!entry.error) usable++;
+          // NetEase-tab song: its own lyrics are pre-selected for preview (saving stays a manual step).
+          if (rows[i].token === autoPick && !entry.error && !userStatus) {
+            show(entry.data.document, entry.data.token, false); nodes[i].setAttribute("aria-current", "true"); userStatus = true;
+            status.textContent = "已选中当前网易云歌曲的歌词（预览）；确认无误后点“保存到本应用”";
+          }
+          if (!busy) summary();
+        }
+      }
       const search = button("联网搜索", () => run(async () => {
-        const seq = ++sequence; results.replaceChildren();
+        const seq = ++sequence; results.replaceChildren(); probed.clear(); userStatus = false; autoPick = "";
         const data = await request("search", { provider: provider.value, query: query.value });
         if (seq !== sequence || !dialog.open) return;
+        // The NetEase song being played is the exact match: list it first.
+        const own = provider.value === "NE" && track.neteaseId ? data.entries.findIndex(row => String(row.songId) === String(track.neteaseId)) : -1;
+        if (own > 0) data.entries.unshift(data.entries.splice(own, 1)[0]);
+        if (own >= 0 && !selected) autoPick = data.entries[0].token;
         status.textContent = data.entries.length ? "找到 " + data.entries.length + " 个候选；点击预览，不会自动采用" : "没有找到候选；可调整搜索词或切换来源";
-        data.entries.forEach(row => {
+        const nodes = data.entries.map((row, index) => {
           const delta = row.durationMs ? " · " + (row.durationMs / 1000).toFixed(1) + " 秒（与本地差 " + (row.durationMs / 1000 - (track.duration || 0)).toFixed(1) + " 秒）" : " · 时长未知";
-          const candidate = button(row.title + " · " + row.artist + " · " + row.album + delta, () => run(async () => {
-            const data = await request("fetch", { token: row.token }); if (!dialog.open) return;
-            show(data.document, data.token, false); status.textContent = "候选预览；请填写标注并试听后采用";
+          const candidate = button((own >= 0 && index === 0 ? "当前网易云歌曲 · " : "") + row.title + " · " + row.artist + " · " + row.album + delta, () => run(async () => {
+            userStatus = true;
+            let entry = probed.get(row.token);
+            if (!entry || entry.error && !missing(entry.error)) {
+              try { entry = { data: await request("fetch", { token: row.token }) }; }
+              catch (error) { if (missing(error)) { entry = { error }; probed.set(row.token, entry); mark(candidate, entry); } throw error; }
+              probed.set(row.token, entry); mark(candidate, entry);
+            }
+            if (!dialog.open) return;
+            if (entry.error) throw new Error("此候选" + (entry.error.message.includes("同步原文") ? "没有同步原文" : "没有歌词") + "（平台未收录该版本的歌词），请选择标注“同步原文”的候选");
+            show(entry.data.document, entry.data.token, false); status.textContent = "候选预览；请填写标注并试听后采用";
           }));
-          results.append(candidate); controls.push(candidate);
+          results.append(candidate); controls.push(candidate); return candidate;
         });
+        if (data.entries.length) probe(data.entries, nodes, seq);
       }));
       controls.push(search, query, provider);
       content.append(context, info, setting("来源", provider), setting("搜索词", query), search, status, results, editor);
@@ -334,6 +389,8 @@
         recovery.hidden = !data.recovery;
         recoveryWarning.hidden = !data.recovery || data.recovery === "complete";
         status.textContent = data.recovery && data.recovery !== "complete" ? "检测到未完成的写入，请先恢复文件" : "可联网搜索；已采用的歌词和标注可离线使用";
+        // NetEase-tab songs without adopted lyrics: search NetEase straight away so its own lyrics are offered first.
+        if (track.neteaseId && !data.document && !data.recovery) setTimeout(() => { if (dialog.open && !results.children.length) search.click(); }, 0);
       });
     }
 
@@ -395,7 +452,14 @@
         if (!lines.length) { const p = document.createElement("p"); p.className = "m3x-plain-lyrics"; p.textContent = parsed.plain || "暂无本地歌词"; $("lyrics-lines").append(p); }
         if (!lines.length && !details.lyricSelection && config.autoLyrics !== false) autoLyrics(track, !parsed.plain);
         lines.forEach((line, index) => {
-          const button = document.createElement("button"); button.className = "m3x-lyric-line"; button.textContent = line.text || "♪";
+          const button = document.createElement("button"); button.className = "m3x-lyric-line";
+          // Lines sharing a timestamp are original first, then translation: each part gets its own colour.
+          const parts = (line.text || "♪").split("\n");
+          parts.forEach((part, index) => {
+            const span = document.createElement("span"); span.className = index ? "m3x-lyric-trans" : "m3x-lyric-main";
+            span.textContent = part; button.append(span);
+          });
+          if (parts.length > 1) button.dataset.bilingual = "true";
           button.addEventListener("click", () => { audio.currentTime = line.time + Number($("lyric-offset").value); }); $("lyrics-lines").append(button);
         });
         $("replaygain-status").textContent = M3X_TOOLS.replayGain(details.replayGain || {}, config.replaygain || "off").label;
@@ -424,7 +488,7 @@
       autoRequest = "";
       if (ui.currentTrack()?.id !== data.id) return;
       if (data.state === "applied") { ui.toast(data.message); lyrics(); return; }
-      autoStatusText({ offline: "暂无本地歌词 · 联网后自动匹配", none: "暂无歌词 · 两个来源均没有时长差 1 秒内的版本",
+      autoStatusText({ offline: "暂无本地歌词 · 联网后自动匹配", none: ui.currentTrack()?.neteaseId ? "暂无歌词 · 网易云没有提供此歌曲的歌词" : "暂无歌词 · 两个来源均没有时长差 1 秒内的版本",
         selected: "暂无本地歌词", error: "暂无本地歌词 · 联网匹配失败，稍后重试" }[data.state] || (data.error ? "暂无本地歌词 · " + data.error : "暂无本地歌词"));
     });
     const autoToggle = document.createElement("input"); autoToggle.type = "checkbox"; autoToggle.checked = config.autoLyrics !== false;

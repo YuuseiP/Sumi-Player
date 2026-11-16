@@ -5,10 +5,11 @@
     const entries = [];
     const plain = [];
     for (const line of source.split(/\r?\n/)) {
-      const stamps = [...line.matchAll(/\[(\d+):([0-5]?\d(?:\.\d+)?)\]/g)];
+      // Same stamps as the native validator: [m:ss], [m:ss.xx] and [m:ss:xx].
+      const stamps = [...line.matchAll(/\[(\d+):([0-5]?\d)(?:[.:](\d+))?\]/g)];
       const text = line.replace(/\[[^\]]*\]/g, "").trim();
       if (!stamps.length) { if (text) plain.push(text); continue; }
-      for (const stamp of stamps) entries.push({ time: Math.max(0, Number(stamp[1]) * 60 + Number(stamp[2]) + offset), text });
+      for (const stamp of stamps) entries.push({ time: Math.max(0, Number(stamp[1]) * 60 + Number(stamp[2]) + (stamp[3] ? Number("0." + stamp[3]) : 0) + offset), text });
     }
     entries.sort((a, b) => a.time - b.time);
     const lines = [];

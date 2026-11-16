@@ -940,6 +940,81 @@
     screen.querySelectorAll("[data-sheet-tab]").forEach(button => button.setAttribute("aria-selected", String(button.dataset.sheetTab === state.sheetTab)));
     screen.querySelectorAll("[data-sheet-panel]").forEach(panel => { panel.hidden = panel.dataset.sheetPanel !== state.sheetTab; });
   }
+  // Mini player: drag the song strip sideways to change track (left = next, right = previous).
+  // The strip follows the finger; past the threshold (a quarter of its width, or a quick flick)
+  // it slides out, the track changes, and the new song slides in from the opposite side.
+  (function miniSwipe() {
+    const strip = screen.querySelector(".m3x-mini-open");
+    if (!strip) return;
+    const reduced = () => window.M3X_MOTION?.reduced?.();
+    let startX = 0, startY = 0, startTime = 0, dx = 0, tracking = false, dragging = false, suppressClick = false;
+    let outgoing = 0, fallback = 0, exitTimer = 0;
+    // The button clips its own box, so the cover and title move inside it and never pass under the play button.
+    function place(x, transition) {
+      const opacity = x ? String(Math.max(0, 1 - Math.abs(x) / (strip.offsetWidth || 1))) : "";
+      Array.from(strip.children).forEach(node => {
+        node.style.transition = transition || "none";
+        node.style.transform = x ? "translateX(" + x + "px)" : "";
+        node.style.opacity = opacity;
+      });
+    }
+    function settle() { place(0, reduced() ? "none" : "transform 200ms cubic-bezier(.2,.8,.2,1), opacity 200ms ease"); }
+    function enter() {
+      clearTimeout(fallback); window.removeEventListener("m3x-track", enter);
+      if (reduced()) { place(0); return; }
+      place(-outgoing * strip.offsetWidth * .4);
+      strip.getBoundingClientRect(); // commit the start position before animating in
+      place(0, "transform 260ms cubic-bezier(.2,.8,.2,1), opacity 260ms ease");
+    }
+    function cancelPending() {
+      clearTimeout(fallback); clearTimeout(exitTimer); exitTimer = 0;
+      window.removeEventListener("m3x-track", enter);
+    }
+    strip.addEventListener("touchstart", event => {
+      suppressClick = false;
+      if (event.touches.length !== 1 || !tracks[state.index] || !queueIndices().length) { tracking = false; return; }
+      cancelPending();
+      tracking = true; dragging = false; dx = 0;
+      startX = event.touches[0].clientX; startY = event.touches[0].clientY; startTime = performance.now();
+      place(0);
+    }, { passive: true });
+    strip.addEventListener("touchmove", event => {
+      if (!tracking) return;
+      const x = event.touches[0].clientX - startX, y = event.touches[0].clientY - startY;
+      if (!dragging) {
+        if (Math.abs(x) < 8 && Math.abs(y) < 8) return;
+        if (Math.abs(y) > Math.abs(x)) { tracking = false; return; }
+        dragging = true; suppressClick = true;
+      }
+      event.preventDefault();
+      dx = x; place(dx);
+    }, { passive: false });
+    function release() {
+      if (!tracking) return;
+      tracking = false;
+      if (!dragging) return;
+      const width = strip.offsetWidth || 1, velocity = Math.abs(dx) / Math.max(1, performance.now() - startTime);
+      const commit = Math.abs(dx) >= Math.max(56, width * .25) || (velocity > .45 && Math.abs(dx) >= 28);
+      if (!commit) { settle(); return; }
+      outgoing = dx < 0 ? -1 : 1;
+      const finish = () => {
+        exitTimer = 0;
+        window.addEventListener("m3x-track", enter);
+        fallback = setTimeout(enter, 900); // single-song queue or a slow native skip: still bring the strip back
+        stepTrack(outgoing > 0);
+      };
+      if (reduced()) { place(0); finish(); return; }
+      place(outgoing * width, "transform 170ms cubic-bezier(.4,0,1,1), opacity 170ms ease");
+      exitTimer = setTimeout(finish, 170);
+    }
+    strip.addEventListener("touchend", release);
+    strip.addEventListener("touchcancel", () => { if (tracking && dragging) settle(); tracking = false; });
+    // A drag must not also open the player page.
+    strip.addEventListener("click", event => {
+      if (!suppressClick) return;
+      suppressClick = false; event.preventDefault(); event.stopPropagation();
+    }, true);
+  })();
   root.addEventListener("click", event => {
     const button = event.target.closest("button");
     if (!button) return;

@@ -88,7 +88,19 @@ final class LyricsProviders {
             JSONObject body = new JSONObject().put("comm", new JSONObject().put("ct", 19).put("cv", 2111))
                 .put("request", new JSONObject().put("method", "GetPlayLyricInfo").put("module", "music.musichallSong.PlayLyricInfo").put("param", p));
             data = request(source, HttpUrl.parse(QQ), body);
-        } else data = request(source, url(NE + "/api/song/lyric", "id", id, "lv", "-1", "tv", "-1", "rv", "-1"), null);
+        } else {
+            // Copyright-restricted releases answer anonymous lyric requests with an empty lrc; the signed-in
+            // account (when there is one) gets the real lyrics, so it is asked first.
+            data = null;
+            NeteaseClient account = NeteaseClient.get();
+            if (account.loggedIn()) {
+                try { data = account.lyric(id); if (!hasLyric(data)) data = null; }
+                catch (Exception error) { android.util.Log.w("M3X.Lyrics", "netease account lyric", error); }
+            }
+            if (data == null) data = request(source, url(NE + "/api/song/lyric", "id", id, "lv", "-1", "tv", "-1", "rv", "-1"), null);
+            if (!hasLyric(data) && (!data.has("code") || data.optInt("code") == 200))
+                throw new IOException("网易云没有提供此版本的歌词" + (account.loggedIn() ? "" : "（部分歌曲需登录网易云账号）"));
+        }
         return lyricsResult(candidate, data);
     }
     static JSONObject lyricsResult(JSONObject candidate, JSONObject data) throws Exception {
@@ -96,6 +108,7 @@ final class LyricsProviders {
         if (candidate.getString("provider").equals("QQ")) {
             if (data.optInt("code", -1) != 0 || data.getJSONObject("request").optInt("code", -1) != 0) throw new IOException("QQ 歌词接口暂不可用");
             JSONObject row = data.getJSONObject("request").getJSONObject("data");
+            if (row.optString("lyric").isEmpty()) throw new IOException("QQ 音乐没有收录此版本的歌词");
             doc.put("original", unb64(row.optString("lyric"))).put("translation", unb64(row.optString("trans")));
         } else {
             // This endpoint may omit code on a successful response; the lrc object is still required.
@@ -107,6 +120,10 @@ final class LyricsProviders {
         doc.put("sourceTitle", candidate.optString("title")).put("sourceArtist", candidate.optString("artist")).put("sourceAlbum", candidate.optString("album"));
         doc.put("offsetMs", 0).put("note", "").put("fetchedAt", System.currentTimeMillis());
         LyricsDocument.validate(doc); return doc;
+    }
+    private static boolean hasLyric(JSONObject data) {
+        JSONObject lrc = data == null ? null : data.optJSONObject("lrc");
+        return lrc != null && !lrc.optString("lyric").trim().isEmpty();
     }
     private static String b64(String text) { return java.util.Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8)); }
     private static String unb64(String text) throws IOException {

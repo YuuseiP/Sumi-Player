@@ -52,7 +52,8 @@ final class LyricsManager {
         String token = UUID.randomUUID().toString();
         item.put("trackId", id).put("uri", track(id).getString("uri"));
         drafts.put(token, item);
-        while (drafts.size() > 60) drafts.remove(drafts.keySet().iterator().next());
+        // Search rows plus their background lyric checks; the oldest drafts go first.
+        while (drafts.size() > 160) drafts.remove(drafts.keySet().iterator().next());
         return token;
     }
     private JSONObject draft(String id, String token) throws Exception {
@@ -90,6 +91,18 @@ final class LyricsManager {
                     }
                     case "search": {
                         JSONArray rows = providers.search(input.getString("provider"), input.getString("query"));
+                        // A song played from the NetEase tab always offers its own NetEase lyrics, whatever the query found.
+                        JSONObject t = track(id);
+                        if ("NE".equals(input.getString("provider")) && t.has("neteaseId")) {
+                            String own = t.getString("neteaseId"); boolean found = false;
+                            for (int i = 0; i < rows.length(); i++) if (own.equals(rows.getJSONObject(i).optString("songId"))) found = true;
+                            if (!found) {
+                                JSONArray merged = new JSONArray().put(json("provider", "NE", "songId", own, "mid", "", "title", t.optString("title"),
+                                    "artist", t.optString("artist"), "album", t.optString("album"), "durationMs", Math.round(t.optDouble("duration") * 1000)));
+                                for (int i = 0; i < rows.length(); i++) merged.put(rows.get(i));
+                                rows = merged;
+                            }
+                        }
                         for (int i = 0; i < rows.length(); i++) { JSONObject row = rows.getJSONObject(i); row.put("token", remember(id, new JSONObject(row.toString()))); }
                         result.put("entries", rows); break;
                     }
@@ -111,7 +124,8 @@ final class LyricsManager {
                         result.put("document", JSONObject.NULL);
                         if (selected(id) != null) { result.put("state", "selected"); break; }
                         File marker = file(id, ".auto"); JSONObject previous = read(marker);
-                        if (!input.optBoolean("force") && previous != null && signature(t).equals(previous.optString("trackSignature"))
+                        // NetEase-tab songs need a single request by song id, so they skip the 24-hour negative cache.
+                        if (!input.optBoolean("force") && !t.has("neteaseId") && previous != null && signature(t).equals(previous.optString("trackSignature"))
                             && System.currentTimeMillis() - previous.optLong("checkedAt") < 86400000L) { result.put("state", "none"); break; }
                         if (!online()) { result.put("state", "offline"); break; }
                         boolean[] transientFailure = {false};

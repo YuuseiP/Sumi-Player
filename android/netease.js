@@ -12,7 +12,6 @@
       calendar: svg('<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 9h16M9 3v4M15 3v4"/>'),
       radio: svg('<rect x="3" y="8" width="18" height="12" rx="2"/><path d="m7 8 10-5"/><circle cx="15.5" cy="14" r="2.5"/><path d="M6.5 12.5h3M6.5 15.5h3"/>'),
       heartbeat: svg('<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"/><path d="M7.5 12h2.5l1.3-2.5 1.9 5 1.3-2.5h2"/>'),
-      chart: svg('<path d="M5 20V11M12 20V5M19 20v-6"/>'),
       heart: svg('<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"/>'),
       clock: svg('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'),
       play: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7Z"/></svg>',
@@ -21,6 +20,7 @@
     const pending = new Map();
     let sequence = 0, mode = "local", profile = null, likes = new Set(), likedPlaylist = null, myLists = null, home = null;
     let homeRequested = false, searchActive = false, searchState = null, radio = null, extending = false;
+    let shownPlaylists = new Set(), playlistBatch = 0, refreshing = null;
     const stack = []; let listOrigin = "netease";
 
     // ---- plumbing ------------------------------------------------------------------------------------
@@ -175,7 +175,8 @@
     // ---- discover ------------------------------------------------------------------------------------
     function ensureHome() { if (!homeRequested) { homeRequested = true; loadAccount(); refreshHome(); } }
     async function refreshHome() {
-      try { home = await request("home"); } catch (error) { home = home || { playlists: [], toplists: [], hot: [], error: error.message }; }
+      try { home = await request("home"); } catch (error) { home = home || { playlists: [], hot: [], error: error.message }; }
+      shownPlaylists = new Set(home.playlists.map(item => item.id)); playlistBatch = 0;
       renderDiscover();
       if (searchActive && !searchState) renderSearchIdle();
     }
@@ -200,31 +201,82 @@
       entries.append(
         btn("m3x-ne-entry", [el("b", "m3x-ne-day", String(new Date().getDate())), el("span", "", "每日推荐")], () => { if (!needLogin()) openList("daily", {}); }),
         btn("m3x-ne-entry", [iconNode("radio"), el("span", "", "私人FM")], () => startRadio("fm")),
-        btn("m3x-ne-entry", [iconNode("heart"), el("span", "", "我喜欢")], () => { if (needLogin()) return; if (likedPlaylist) openList("playlist", { id: likedPlaylist.id }); else ui.toast("正在读取歌单"); }),
-        btn("m3x-ne-entry", [iconNode("chart"), el("span", "", "排行榜")], () => openToplists()));
+        btn("m3x-ne-entry", [iconNode("heart"), el("span", "", "我喜欢")], () => { if (needLogin()) return; if (likedPlaylist) openList("playlist", { id: likedPlaylist.id }); else ui.toast("正在读取歌单"); }));
       nodes.push(entries);
       if (!home) nodes.push(loading());
       else {
         if (home.error && !home.playlists.length) nodes.push(el("p", "m3x-ne-loading", home.error));
         if (home.playlists.length) {
           const section = el("section", "m3x-ne-section"), heading = el("div", "m3x-section-heading"), grid = el("div", "m3x-ne-grid");
-          heading.append(el("h3", "", loggedIn() ? "为你推荐的歌单" : "推荐歌单"));
+          heading.append(el("h3", "", loggedIn() && !playlistBatch ? "为你推荐的歌单" : "推荐歌单"), btn("m3x-text-button", "换一批", () => morePlaylists()));
           home.playlists.slice(0, 9).forEach(item => grid.append(card(item, () => openList("playlist", { id: item.id }))));
           section.append(heading, grid); nodes.push(section);
-        }
-        if (home.toplists.length) {
-          const section = el("section", "m3x-ne-section"), heading = el("div", "m3x-section-heading");
-          heading.append(el("h3", "", "排行榜"), btn("m3x-text-button", "全部 ›", () => openToplists()));
-          section.append(heading, ...home.toplists.slice(0, 4).map(item => listRow(item, item.note || "官方榜", () => openList("playlist", { id: item.id }))));
-          nodes.push(section);
         }
       }
       view.replaceChildren(...nodes);
     }
-    function openToplists() {
-      if (!home?.toplists?.length) { ui.toast("排行榜加载中"); return; }
-      openView({ title: "排行榜", render: () => home.toplists.map(item => listRow(item, item.note || "官方榜", () => openList("playlist", { id: item.id }))) });
+    // ---- pull to refresh: swap the recommended playlists for a batch not shown yet ----------------------
+    function morePlaylists() {
+      if (refreshing) return refreshing;
+      if (!home) { ui.toast("歌单加载中"); return Promise.resolve(); }
+      refreshing = (async () => {
+        try {
+          const data = await request("more-playlists", { batch: playlistBatch + 1, exclude: Array.from(shownPlaylists).slice(-600) });
+          playlistBatch++; home = { ...home, playlists: data.playlists, error: "" };
+          data.playlists.forEach(item => shownPlaylists.add(item.id));
+          renderDiscover();
+        } catch (error) { ui.toast(error.message); }
+        finally { refreshing = null; }
+      })();
+      return refreshing;
     }
+    (function pullToRefresh() {
+      const panel = root.querySelector('[data-panel="netease"]'), view = $("ne-discover");
+      const indicator = el("div", "m3x-ne-pull"); indicator.setAttribute("aria-hidden", "true");
+      const label = el("span", "", "下拉换一批歌单"); indicator.append(el("i"), label);
+      view.before(indicator);
+      const THRESHOLD = 64, MAX = 110;
+      let startY = 0, startX = 0, pull = 0, tracking = false, decided = false;
+      const reduced = () => window.M3X_MOTION?.reduced?.();
+      function set(distance, animate) {
+        pull = distance;
+        const transition = animate && !reduced() ? "transform 220ms cubic-bezier(.2,.8,.2,1), opacity 220ms ease" : "none";
+        view.style.transition = indicator.style.transition = transition;
+        view.style.transform = distance ? "translateY(" + distance + "px)" : "";
+        indicator.style.transform = "translateY(" + (distance - 44) + "px)";
+        indicator.style.opacity = String(Math.min(1, distance / THRESHOLD));
+        indicator.querySelector("i").style.transform = indicator.dataset.loading === "true" ? "" : "rotate(" + (45 + Math.min(1, distance / THRESHOLD) * 180) + "deg)";
+        indicator.dataset.ready = String(distance >= THRESHOLD);
+      }
+      panel.addEventListener("touchstart", event => {
+        if (refreshing || searchActive || panel.scrollTop > 0 || event.touches.length !== 1) { tracking = false; return; }
+        tracking = true; decided = false; startY = event.touches[0].clientY; startX = event.touches[0].clientX;
+      }, { passive: true });
+      panel.addEventListener("touchmove", event => {
+        if (!tracking) return;
+        const dy = event.touches[0].clientY - startY, dx = event.touches[0].clientX - startX;
+        if (!decided) {
+          if (Math.abs(dy) < 8 && Math.abs(dx) < 8) return;
+          decided = true;
+          if (dy <= 0 || Math.abs(dx) > Math.abs(dy) || panel.scrollTop > 0) { tracking = false; return; }
+        }
+        if (dy <= 0) { set(0, false); return; }
+        event.preventDefault();
+        // Rubber-band resistance: the content follows the finger at a decreasing rate.
+        const distance = Math.min(MAX, dy * .5);
+        set(distance, false);
+        label.textContent = distance >= THRESHOLD ? "松开换一批歌单" : "下拉换一批歌单";
+      }, { passive: false });
+      function release() {
+        if (!tracking) return;
+        tracking = false;
+        if (pull < THRESHOLD) { set(0, true); return; }
+        set(THRESHOLD - 8, true); label.textContent = "正在换一批…"; indicator.dataset.loading = "true";
+        morePlaylists().then(() => { indicator.dataset.loading = "false"; set(0, true); });
+      }
+      panel.addEventListener("touchend", release);
+      panel.addEventListener("touchcancel", release);
+    })();
 
     // ---- search: a single bar ------------------------------------------------------------------------
     const searchInput = $("ne-search"), searchView = $("ne-search-view"), discover = $("ne-discover"), cancel = $("ne-search-cancel");
@@ -342,7 +394,7 @@
       return token.promise;
     }
 
-    // ---- collection page (playlist / daily / album / artist / similar / recent / toplists) -------------
+    // ---- collection page (playlist / daily / album / artist / similar / recent) ------------------------
     function openView(view) {
       if (ui.page() !== "netease-list") { listOrigin = ui.page(); stack.length = 0; }
       stack.push(view); renderView(); ui.go("netease-list");
