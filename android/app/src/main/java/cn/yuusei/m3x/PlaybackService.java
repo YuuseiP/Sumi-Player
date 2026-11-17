@@ -330,12 +330,28 @@ public final class PlaybackService extends MediaSessionService {
             int index = 0;
             for (int i = 0; i < items.size(); i++) if (items.get(i).mediaId.equals(selected)) { index = i; break; }
             if (current == null) position = ui.optBoolean("rememberPosition", true) ? Math.max(0, (long) (ui.optDouble("position") * 1000)) : 0;
-            List<MediaSource> sources = new ArrayList<>();
-            for (MediaItem item : items) sources.add(sourceFactory.createMediaSource(item));
-            android.util.Log.i("M3X.Perf", "queue sources built in " + (SystemClock.elapsedRealtime() - started) + " ms");
-            player.setMediaSources(sources, index, items.isEmpty() || !items.get(index).mediaId.equals(selected) ? 0 : position);
-            player.setPlayWhenReady(playing && !items.isEmpty());
-            android.util.Log.i("M3X.Perf", "queue applied in " + (SystemClock.elapsedRealtime() - started) + " ms");
+            // When the song that is playing stays in the new queue (play-order changes, heartbeat, endless FM),
+            // edit the playlist around it instead of replacing everything: setMediaSources would re-prepare the
+            // current source and drop its buffer, which is an audible stall (and a re-download for online songs).
+            boolean keepCurrent = current != null && !items.isEmpty() && items.get(index).mediaId.equals(current.mediaId)
+                && player.getPlaybackState() != Player.STATE_IDLE;
+            if (keepCurrent) {
+                int at = player.getCurrentMediaItemIndex(), count = player.getMediaItemCount();
+                if (at + 1 < count) player.removeMediaItems(at + 1, count);
+                if (at > 0) player.removeMediaItems(0, at);
+                List<MediaSource> before = new ArrayList<>(), after = new ArrayList<>();
+                for (int i = 0; i < items.size(); i++) if (i != index) (i < index ? before : after).add(sourceFactory.createMediaSource(items.get(i)));
+                if (!after.isEmpty()) player.addMediaSources(1, after);
+                if (!before.isEmpty()) player.addMediaSources(0, before);
+                android.util.Log.i("M3X.Perf", "queue edited around current in " + (SystemClock.elapsedRealtime() - started) + " ms");
+            } else {
+                List<MediaSource> sources = new ArrayList<>();
+                for (MediaItem item : items) sources.add(sourceFactory.createMediaSource(item));
+                android.util.Log.i("M3X.Perf", "queue sources built in " + (SystemClock.elapsedRealtime() - started) + " ms");
+                player.setMediaSources(sources, index, items.isEmpty() || !items.get(index).mediaId.equals(selected) ? 0 : position);
+                player.setPlayWhenReady(playing && !items.isEmpty());
+                android.util.Log.i("M3X.Perf", "queue applied in " + (SystemClock.elapsedRealtime() - started) + " ms");
+            }
         }
         queueLibrary = app.library.all(); queueSelection = selection;
         setQueueMode(ui);
